@@ -21,6 +21,13 @@ The checkpoint file contains:
     "answer":    { ... }        <- accumulated classifications so far
   }
 
+K-Medoids medoid mode
+---------------------
+When ``--medoid_mode`` is passed, the script loads documents from
+``medoid_documents.jsonl`` inside the run directory instead of the full
+dataset.  This allows the LLM to classify only the representative medoid
+documents (typically ~100 instead of ~3000).
+
 Original source: ECNU-Text-Computing/Text-Clustering-via-LLM
 Modifications:
   - ini_client() wired to text_clustering.client.make_client()
@@ -31,6 +38,7 @@ Modifications:
   - model read from LLM_MODEL env var
   - outputs written to timestamped run directories under ./runs/
   - checkpoint/resume added (checkpoint.json every 200 samples)
+  - added --medoid_mode for K-Medoids pre-clustering integration
 """
 
 import argparse
@@ -48,6 +56,15 @@ logger = logging.getLogger(__name__)
 
 CHECKPOINT_FILE = "checkpoint.json"
 CLASSIFICATIONS_FILE = "classifications.json"
+
+
+def _load_medoid_documents(run_dir: str) -> list[dict]:
+    """Load the medoid document subset from ``medoid_documents.jsonl`` in the run directory."""
+    path = os.path.join(run_dir, "medoid_documents.jsonl")
+    with open(path, "r") as f:
+        docs = [json.loads(line) for line in f]
+    logger.info("Loaded %d medoid documents from %s", len(docs), path)
+    return docs
 
 
 def get_merged_labels(run_dir: str) -> list[str]:
@@ -149,15 +166,26 @@ def main(args):
     size = "large" if args.use_large else "small"
     setup_logging(os.path.join(args.run_dir, "step2_classification.log"))
 
+    medoid_mode = getattr(args, "medoid_mode", False)
+
     logger.info("=== Step 2 — Classification ===")
     logger.info("Dataset : %s  |  split: %s", args.data, size)
     logger.info("Run dir : %s", args.run_dir)
+    if medoid_mode:
+        logger.info("Mode    : MEDOID (classifying medoid subset only)")
     start = time.time()
 
     client = ini_client()
-    data_list = load_dataset(args.data_path, args.data, args.use_large)
+
+    # Load documents — either full dataset or medoid subset
+    if medoid_mode:
+        data_list = _load_medoid_documents(args.run_dir)
+    else:
+        data_list = load_dataset(args.data_path, args.data, args.use_large)
+
     label_list = get_merged_labels(args.run_dir)
     logger.info("Labels to classify into: %d", len(label_list))
+    logger.info("Documents to classify  : %d", len(data_list))
 
     answer = known_label_categorize(args, client, data_list, label_list, args.run_dir)
     answer = {k: v for k, v in answer.items() if v}  # drop empty buckets
@@ -185,6 +213,13 @@ def build_parser():
     parser.add_argument("--use_large", action="store_true")
     parser.add_argument("--print_details", type=bool, default=False)
     parser.add_argument("--test_num", type=int, default=5)
+    parser.add_argument(
+        "--medoid_mode", action="store_true",
+        help=(
+            "Classify only the medoid documents (from medoid_documents.jsonl in run_dir) "
+            "instead of the full dataset. Used with the K-Medoids pre-clustering step."
+        ),
+    )
     # --api_key kept for backward compatibility but ignored; key comes from .env
     parser.add_argument("--api_key", type=str, default="", help="ignored — use OPENAI_API_KEY in .env")
     return parser

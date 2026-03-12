@@ -54,7 +54,14 @@ def load_data(data_path, data, use_large):
 
 
 def load_predict_data(run_dir):
-    path = os.path.join(run_dir, "classifications.json")
+    """Load predicted classifications — prefer the propagated file if it exists."""
+    full_path = os.path.join(run_dir, "classifications_full.json")
+    base_path = os.path.join(run_dir, "classifications.json")
+    if os.path.exists(full_path):
+        logger.info("Using propagated classifications: %s", full_path)
+        path = full_path
+    else:
+        path = base_path
     with open(path, "r") as f:
         return json.load(f)
 
