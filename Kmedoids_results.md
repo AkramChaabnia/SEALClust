@@ -37,21 +37,28 @@
 | Parameter | Value |
 |-----------|-------|
 | Embedding model | `all-MiniLM-L6-v2` |
-| K-Medoids k | 100 |
+| K-Medoids k | 100 / 300 |
 | Metric | cosine |
 | Init | k-medoids++ |
 | Random seed | 42 |
 
-### `massive_scenario` · small split (2,974 docs → 100 medoids)
+### `massive_scenario` · small split (2,974 docs)
 
 | Run | Model | k | n_pred | ACC | NMI | ARI | LLM Calls | Reduction | Status |
 |-----|-------|---|--------|-----|-----|-----|-----------|-----------|--------|
 | KM-01 | `gpt-4o-mini` | 100 | 19 | 54.98 | 57.78 | 41.66 | ~300 | ~10× | ✅ Done |
+| KM-02 | `gpt-4o-mini` | 300 | 20 | 55.21 | 57.25 | 39.85 | ~500 | ~6× | ✅ Done |
 
 > **KM-01 notes**: Label generation ran on full 2974 docs (not medoids only), producing 715 proposed labels.
 > Re-merged with `target_k=18` → 19 labels. Classification ran on 100 medoids only (181s).
 > 23/2974 docs (0.77%) received no label during propagation.
 > Run dir: `./runs/massive_scenario_small_20260312_112628`
+>
+> **KM-02 notes**: k=300 (9.9× reduction). Label generation on 300 medoid docs produced 683 proposed labels.
+> Re-merged with `target_k=18` → 19 labels (20 predicted clusters incl. "Unsuccessful").
+> Classification ran on 300 medoids (1161.3s, includes ~10min API retry pause).
+> 11/2974 docs (0.37%) received no label during propagation.
+> Run dir: `./runs/massive_scenario_small_20260312_120831`
 
 ### `massive_intent` · small split (2,974 docs → 100 medoids)
 
@@ -83,7 +90,8 @@
 
 | Dataset | Paper ACC | Paper NMI | Paper ARI | KM ACC | KM NMI | KM ARI | LLM Calls (Original → KM) |
 |---------|-----------|-----------|-----------|--------|--------|--------|--------------------------|
-| `massive_scenario` | 71.75 | 78.00 | 56.86 | **54.98** | **57.78** | **41.66** | 3,000 → ~300 |
+| `massive_scenario` (k=100) | 71.75 | 78.00 | 56.86 | **54.98** | **57.78** | **41.66** | 3,000 → ~300 |
+| `massive_scenario` (k=300) | 71.75 | 78.00 | 56.86 | **55.21** | **57.25** | **39.85** | 3,000 → ~500 |
 | `massive_intent` | 64.12 | 65.44 | 48.92 | — | — | — | 3,000 → 100 |
 | `go_emotion` | 31.66 | 27.39 | 13.50 | — | — | — | 5,940 → 100 |
 | `arxiv_fine` | 38.78 | 57.43 | 20.55 | — | — | — | 3,674 → 100 |
