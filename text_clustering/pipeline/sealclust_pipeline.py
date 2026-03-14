@@ -1,48 +1,48 @@
 """
-sealclust_pipeline.py — SEAL-Clust full 7-step pipeline CLI.
+sealclust_pipeline.py — SEALClust 9-stage pipeline CLI.
 
-Implements the complete SEAL-Clust framework as a single entry point
-(``tc-sealclust``) with two sub-commands:
+Implements the complete SEALClust (Scalable Efficient Autonomous LLM
+Clustering) framework as a single entry point (``tc-sealclust``).
 
-  1. **precluster** (default) — Steps 1–4 + auto-k (Step 6):
-       Embed → t-SNE → Elbow auto-k → K-Medoids → Prototype extraction
-  2. **propagate** — Step 7:
-       Map prototype labels back to every document.
+The 9-Stage Pipeline
+--------------------
+  1. **Document Embedding** — all-MiniLM-L6-v2 (384d)
+  2. **Dimensionality Reduction** — PCA (default 50d) or t-SNE
+  3. **Overclustering** — K-Medoids with K₀ >> K* (e.g. 300)
+  4. **Representative Selection** — medoid documents (actual docs, not centroids)
+  5. **Label Discovery** — LLM proposes labels from representative docs ONLY
+  6. **K* Estimation** — GMM + BIC on representative embeddings
+  7. **Label Consolidation** — LLM merges candidate labels to exactly K*
+  8. **Representative Classification** — LLM classifies K₀ reps into K* labels
+  9. **Label Propagation** — propagate rep labels to all documents
 
-The LLM steps (5: label generation + classification) are run with the
-existing ``tc-label-gen`` and ``tc-classify --medoid_mode`` commands
-between precluster and propagate.
+Usage Modes
+-----------
+**Full pipeline** (Stages 1–7, then 8–9 separately)::
 
-Auto-k with manual override
-----------------------------
-By default, ``tc-sealclust`` runs the Elbow method to find the best k.
-If you want to **skip auto-k** and set k yourself, pass ``--sealclust_k <N>``.
-When ``--sealclust_k 0`` (or omitted), the Elbow method runs automatically.
-
-Workflow
---------
-::
-
-    # Step 1–4, 6: Embed + t-SNE + auto-k + K-Medoids + prototypes
+    # Stages 1–7: Embed + PCA + Overcluster + Label Discovery + BIC + Consolidate
     tc-sealclust --data massive_scenario
 
-    # (optional) manually specify k instead of auto-k
-    tc-sealclust --data massive_scenario --sealclust_k 80
-
-    # Step 5a: LLM label generation
-    tc-label-gen --data massive_scenario --run_dir ./runs/<run_dir>
-
-    # (optional) re-merge labels
-    python tools/remerge_labels.py ./runs/<run_dir> 18
-
-    # Step 5b: LLM classification on prototypes only
+    # Stage 8: Classify representatives with K* labels
     tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --medoid_mode
 
-    # Step 7: propagate labels to full dataset
+    # Stage 9: Propagate labels to full dataset
     tc-sealclust --data massive_scenario --run_dir ./runs/<run_dir> --propagate
 
     # Evaluate
     tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
+
+**Custom K₀ (overclustering size)**::
+
+    tc-sealclust --data massive_scenario --k0 200
+
+**Manual K* (skip BIC estimation)**::
+
+    tc-sealclust --data massive_scenario --k_star 18
+
+**Use t-SNE instead of PCA**::
+
+    tc-sealclust --data massive_scenario --reduction tsne
 """
 
 from __future__ import annotations
@@ -58,10 +58,13 @@ import numpy as np
 
 from text_clustering.config import (
     EMBEDDING_MODEL,
+    SEALCLUST_K0,
+    SEALCLUST_BIC_K_MIN,
+    SEALCLUST_BIC_K_MAX,
+    SEALCLUST_REDUCTION,
+    SEALCLUST_PCA_DIMS,
+    SEALCLUST_LABEL_CHUNK_SIZE,
     SEALCLUST_K,
-    SEALCLUST_ELBOW_K_MIN,
-    SEALCLUST_ELBOW_K_MAX,
-    SEALCLUST_ELBOW_STEP,
     TSNE_N_COMPONENTS,
     TSNE_PERPLEXITY,
     TSNE_N_ITER,
@@ -69,13 +72,14 @@ from text_clustering.config import (
 )
 from text_clustering.data import load_dataset
 from text_clustering.embedding import compute_embeddings
-from text_clustering.dimreduce import reduce_tsne
+from text_clustering.dimreduce import reduce_tsne, reduce_pca
 from text_clustering.sealclust import (
-    elbow_select_k,
-    find_elbow,
+    run_sealclust_clustering,
+    estimate_k_star_bic,
+    discover_labels,
+    consolidate_labels,
     get_prototypes,
     propagate_labels,
-    run_sealclust_clustering,
 )
 from text_clustering.kmedoids import build_cluster_map
 from text_clustering.logging_config import setup_logging
@@ -105,17 +109,19 @@ def _write_jsonl(path: str, records: list[dict]) -> None:
     logger.info("Wrote %s (%d records)", path, len(records))
 
 
-# ── pre-cluster sub-command (Steps 1–4, 6) ────────────────────────────────
+# ── full pipeline: Stages 1–7 ─────────────────────────────────────────────
 
-def precluster(args) -> str:
-    """Run the full SEAL-Clust pre-clustering pipeline.
+def run_pipeline(args) -> str:
+    """Run the full SEALClust pipeline (Stages 1–7).
 
-    Steps executed:
-      1. Embedding generation (or cache reuse)
-      2. t-SNE dimensionality reduction (or cache reuse)
-      3+6. Auto-k via Elbow method (or manual k override)
-      3. K-Medoids microcluster formation
-      4. Prototype extraction → medoid_documents.jsonl
+    Stages executed:
+      1. Document Embedding (or cache reuse)
+      2. Dimensionality Reduction — PCA (default) or t-SNE
+      3. Overclustering — K-Medoids with K₀
+      4. Representative Selection — medoid documents
+      5. Label Discovery — LLM on representatives only
+      6. K* Estimation — GMM + BIC on representative embeddings
+      7. Label Consolidation — merge to exactly K*
 
     Returns the run directory path.
     """
@@ -127,30 +133,34 @@ def precluster(args) -> str:
     else:
         run_dir = _make_run_dir(args.runs_dir, args.data, size)
 
-    setup_logging(os.path.join(run_dir, "sealclust_precluster.log"))
+    setup_logging(os.path.join(run_dir, "sealclust_pipeline.log"))
 
-    logger.info("=" * 60)
-    logger.info("SEAL-Clust Pre-Clustering Pipeline")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("SEALClust — 9-Stage Pipeline (Stages 1–7)")
+    logger.info("=" * 70)
     logger.info("Dataset       : %s  |  split: %s", args.data, size)
     logger.info("Embedding     : %s", args.embedding_model)
-    logger.info("t-SNE         : n_components=%d, perplexity=%.1f, metric=%s",
-                args.tsne_n_components, args.tsne_perplexity, args.tsne_metric)
-    if args.sealclust_k:
-        logger.info("k (manual)    : %d", args.sealclust_k)
+    logger.info("Reduction     : %s", args.reduction)
+    if args.reduction == "pca":
+        logger.info("PCA dims      : %d", args.pca_dims)
     else:
-        logger.info("k (auto)      : Elbow method [%d–%d] step=%d",
-                    args.elbow_k_min, args.elbow_k_max, args.elbow_step)
+        logger.info("t-SNE         : n_components=%d, perplexity=%.1f, metric=%s",
+                    args.tsne_n_components, args.tsne_perplexity, args.tsne_metric)
+    logger.info("K₀ (overclust): %d", args.k0)
+    if args.k_star:
+        logger.info("K* (manual)   : %d", args.k_star)
+    else:
+        logger.info("K* (auto)     : GMM + BIC [%d–%d]", args.bic_k_min, args.bic_k_max)
     logger.info("Run dir       : %s", run_dir)
+    logger.info("-" * 70)
     start = time.time()
 
-    # ── Step 1: Load dataset ──
+    # ── Stage 1: Load dataset + Compute embeddings ──
     data_list = load_dataset(args.data_path, args.data, args.use_large)
     texts = [item["input"] for item in data_list]
     n_documents = len(texts)
-    logger.info("Step 1: Loaded %d documents", n_documents)
+    logger.info("Stage 1: Loaded %d documents", n_documents)
 
-    # ── Step 1: Compute embeddings (or reuse cache) ──
     emb_path = os.path.join(run_dir, "embeddings.npy")
     if os.path.exists(emb_path):
         logger.info("[cache] Loading embeddings from %s", emb_path)
@@ -160,94 +170,55 @@ def precluster(args) -> str:
             texts, model_name=args.embedding_model, batch_size=args.batch_size,
         )
         np.save(emb_path, embeddings)
-        logger.info("Saved embeddings to %s  shape=%s", emb_path, embeddings.shape)
+        logger.info("Stage 1: Saved embeddings shape=%s", embeddings.shape)
 
-    # ── Step 2: t-SNE dimensionality reduction (or reuse cache) ──
+    # ── Stage 2: Dimensionality Reduction ──
     reduced_path = os.path.join(run_dir, "embeddings_reduced.npy")
     if os.path.exists(reduced_path):
         logger.info("[cache] Loading reduced embeddings from %s", reduced_path)
         embeddings_reduced = np.load(reduced_path)
     else:
-        logger.info("Step 2: Running t-SNE dimensionality reduction …")
-        embeddings_reduced = reduce_tsne(
-            embeddings,
-            n_components=args.tsne_n_components,
-            perplexity=args.tsne_perplexity,
-            n_iter=args.tsne_n_iter,
-            random_state=args.seed,
-            metric=args.tsne_metric,
-        )
+        logger.info("Stage 2: Dimensionality reduction (%s) …", args.reduction)
+        if args.reduction == "pca":
+            embeddings_reduced = reduce_pca(
+                embeddings,
+                n_components=args.pca_dims,
+                random_state=args.seed,
+            )
+        else:
+            embeddings_reduced = reduce_tsne(
+                embeddings,
+                n_components=args.tsne_n_components,
+                perplexity=args.tsne_perplexity,
+                n_iter=args.tsne_n_iter,
+                random_state=args.seed,
+                metric=args.tsne_metric,
+            )
         np.save(reduced_path, embeddings_reduced)
-        logger.info("Saved reduced embeddings to %s  shape=%s",
-                    reduced_path, embeddings_reduced.shape)
+        logger.info("Stage 2: Reduced %s → %s", embeddings.shape, embeddings_reduced.shape)
 
-    # ── Step 6 (before 3): Determine k ──
+    # ── Stage 3: Overclustering with K₀ ──
     meta_path = os.path.join(run_dir, "sealclust_metadata.json")
 
     if os.path.exists(meta_path):
-        # Resume from checkpoint
         logger.info("[cache] Loading SEAL-Clust metadata from %s", meta_path)
         with open(meta_path) as f:
             meta = json.load(f)
-        k = meta["k"]
+        k0 = meta["k"]
         cluster_labels = np.array(meta["cluster_assignments"])
         medoid_indices = np.array(meta["medoid_indices"])
-        logger.info("[cache] k=%d, %d medoids", k, len(medoid_indices))
+        logger.info("[cache] K₀=%d, %d medoids", k0, len(medoid_indices))
     else:
-        if args.sealclust_k:
-            # ── Manual k ──
-            k = args.sealclust_k
-            logger.info("Step 6: Using manual k=%d (Elbow skipped)", k)
-            elbow_scores = {}
-        else:
-            # ── Auto-k via Elbow ──
-            logger.info("Step 6: Running Elbow method for auto-k …")
-            k, elbow_scores = elbow_select_k(
-                embeddings_reduced,
-                k_range=(args.elbow_k_min, args.elbow_k_max),
-                step=args.elbow_step,
-                random_state=args.seed,
-            )
-            logger.info("Step 6: Elbow selected k=%d", k)
-
-            # Save elbow scores for inspection / plotting
-            _write_json(os.path.join(run_dir, "elbow_scores.json"), {
-                "best_k": k,
-                "k_min": args.elbow_k_min,
-                "k_max": args.elbow_k_max,
-                "step": args.elbow_step,
-                "scores": {str(kk): v for kk, v in elbow_scores.items()},
-            })
-
-        # ── Step 3: K-Medoids microcluster formation ──
-        logger.info("Step 3: Running K-Medoids with k=%d …", k)
+        k0 = min(args.k0, n_documents - 1)
+        logger.info("Stage 3: Overclustering with K₀=%d (K-Medoids on %dD embeddings) …",
+                    k0, embeddings_reduced.shape[1])
         cluster_labels, medoid_indices = run_sealclust_clustering(
-            embeddings_reduced, k=k, random_state=args.seed,
+            embeddings_reduced, k=k0, random_state=args.seed,
         )
+        logger.info("Stage 3: %d micro-clusters, %d medoids", k0, len(medoid_indices))
 
-        # ── Save metadata ──
-        metadata = {
-            "dataset": args.data,
-            "split": size,
-            "n_documents": n_documents,
-            "pipeline": "sealclust",
-            "k": k,
-            "k_method": "manual" if args.sealclust_k else "elbow",
-            "embedding_model": args.embedding_model,
-            "tsne_n_components": args.tsne_n_components,
-            "tsne_perplexity": args.tsne_perplexity,
-            "tsne_metric": args.tsne_metric,
-            "tsne_n_iter": args.tsne_n_iter,
-            "random_state": args.seed,
-            "n_medoids": len(medoid_indices),
-            "medoid_indices": sorted(int(i) for i in medoid_indices),
-            "cluster_assignments": [int(c) for c in cluster_labels],
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-        }
-        _write_json(meta_path, metadata)
-
-    # ── Step 4: Prototype extraction ──
-    logger.info("Step 4: Extracting prototypes …")
+    # ── Stage 4: Representative Selection ──
+    logger.info("Stage 4: Extracting representative documents …")
     prototype_docs = get_prototypes(data_list, medoid_indices)
     _write_jsonl(os.path.join(run_dir, "medoid_documents.jsonl"), prototype_docs)
 
@@ -256,29 +227,134 @@ def precluster(args) -> str:
     cluster_sizes = {str(cid): len(members) for cid, members in sorted(cluster_map.items())}
     _write_json(os.path.join(run_dir, "cluster_sizes.json"), cluster_sizes)
 
+    # ── Stage 5: Label Discovery (LLM on representatives ONLY) ──
+    labels_proposed_path = os.path.join(run_dir, "labels_proposed.json")
+    if os.path.exists(labels_proposed_path):
+        logger.info("[cache] Loading proposed labels from %s", labels_proposed_path)
+        with open(labels_proposed_path) as f:
+            candidate_labels = json.load(f)
+    else:
+        from text_clustering.llm import ini_client
+        client = ini_client()
+
+        representative_texts = [doc["input"] for doc in prototype_docs]
+        candidate_labels = discover_labels(
+            representative_texts, client, chunk_size=args.label_chunk_size,
+        )
+        _write_json(labels_proposed_path, candidate_labels)
+
+    # ── Stage 6: K* Estimation via GMM + BIC on representative embeddings ──
+    # Use the REDUCED (PCA/t-SNE) embeddings of representatives for BIC.
+    # Full 384D embeddings cause BIC to over-penalise and always pick smallest K.
+    medoid_indices_sorted = sorted(int(i) for i in medoid_indices)
+    representative_embeddings = embeddings_reduced[medoid_indices_sorted]
+
+    if args.k_star:
+        k_star = args.k_star
+        logger.info("Stage 6: Using manual K*=%d (BIC skipped)", k_star)
+        bic_scores = {}
+    else:
+        logger.info("Stage 6: Estimating K* via GMM + BIC on %d representative embeddings …",
+                    representative_embeddings.shape[0])
+        k_star, bic_scores = estimate_k_star_bic(
+            representative_embeddings,
+            k_min=args.bic_k_min,
+            k_max=args.bic_k_max,
+            random_state=args.seed,
+        )
+        _write_json(os.path.join(run_dir, "bic_scores.json"), {
+            "k_star": k_star,
+            "k_min": args.bic_k_min,
+            "k_max": args.bic_k_max,
+            "scores": {str(k): v for k, v in bic_scores.items()},
+        })
+
+    # ── Stage 7: Label Consolidation — merge to exactly K* ──
+    labels_merged_path = os.path.join(run_dir, "labels_merged.json")
+    if os.path.exists(labels_merged_path):
+        logger.info("[cache] Loading merged labels from %s", labels_merged_path)
+        with open(labels_merged_path) as f:
+            final_labels = json.load(f)
+    else:
+        if 'client' not in dir():
+            from text_clustering.llm import ini_client
+            client = ini_client()
+
+        final_labels = consolidate_labels(candidate_labels, k_star, client)
+        _write_json(labels_merged_path, final_labels)
+
+    # ── Save ground-truth labels ──
+    from text_clustering.data import get_label_list
+    true_labels = get_label_list(data_list)
+    _write_json(os.path.join(run_dir, "labels_true.json"), true_labels)
+
+    # ── Save metadata ──
+    if not os.path.exists(meta_path):
+        metadata = {
+            "dataset": args.data,
+            "split": size,
+            "n_documents": n_documents,
+            "pipeline": "sealclust_v2",
+            "reduction": args.reduction,
+            "reduction_dims": args.pca_dims if args.reduction == "pca" else args.tsne_n_components,
+            "k": k0,
+            "k0": k0,
+            "k_star": k_star,
+            "k_star_method": "manual" if args.k_star else "bic",
+            "n_candidate_labels": len(candidate_labels),
+            "n_final_labels": len(final_labels),
+            "embedding_model": args.embedding_model,
+            "random_state": args.seed,
+            "n_medoids": len(medoid_indices),
+            "medoid_indices": medoid_indices_sorted,
+            "cluster_assignments": [int(c) for c in cluster_labels],
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        if args.reduction == "tsne":
+            metadata.update({
+                "tsne_n_components": args.tsne_n_components,
+                "tsne_perplexity": args.tsne_perplexity,
+                "tsne_metric": args.tsne_metric,
+                "tsne_n_iter": args.tsne_n_iter,
+            })
+        _write_json(meta_path, metadata)
+    else:
+        # Update existing metadata with K* and label info
+        with open(meta_path) as f:
+            metadata = json.load(f)
+        metadata.update({
+            "pipeline": "sealclust_v2",
+            "k_star": k_star,
+            "k_star_method": "manual" if args.k_star else "bic",
+            "n_candidate_labels": len(candidate_labels),
+            "n_final_labels": len(final_labels),
+        })
+        _write_json(meta_path, metadata)
+
     elapsed = time.time() - start
-    logger.info("=" * 60)
-    logger.info("SEAL-Clust pre-clustering complete in %.1fs", elapsed)
-    logger.info("  %d documents → %d prototypes (%.1fx reduction)",
-                n_documents, len(medoid_indices),
-                n_documents / max(len(medoid_indices), 1))
-    logger.info("  k=%d (%s)", k, "manual" if args.sealclust_k else "elbow auto")
-    logger.info("  Run dir: %s", run_dir)
+    logger.info("=" * 70)
+    logger.info("SEALClust Stages 1–7 complete in %.1fs", elapsed)
+    logger.info("  Documents     : %d", n_documents)
+    logger.info("  K₀ (overcl.)  : %d  (%.1f× compression)", k0, n_documents / max(k0, 1))
+    logger.info("  K* (optimal)  : %d  (%s)", k_star, "manual" if args.k_star else "BIC")
+    logger.info("  Candidate labs: %d → Final labs: %d", len(candidate_labels), len(final_labels))
+    logger.info("  Reduction     : %s (%dD → %dD)", args.reduction,
+                embeddings.shape[1], embeddings_reduced.shape[1])
+    logger.info("  Run dir       : %s", run_dir)
     logger.info("")
     logger.info("Next steps:")
-    logger.info("  1. tc-label-gen --data %s --run_dir %s", args.data, run_dir)
-    logger.info("  2. tc-classify --data %s --run_dir %s --medoid_mode", args.data, run_dir)
-    logger.info("  3. tc-sealclust --data %s --run_dir %s --propagate", args.data, run_dir)
-    logger.info("  4. tc-evaluate --data %s --run_dir %s", args.data, run_dir)
-    logger.info("=" * 60)
+    logger.info("  Stage 8: tc-classify --data %s --run_dir %s --medoid_mode", args.data, run_dir)
+    logger.info("  Stage 9: tc-sealclust --data %s --run_dir %s --propagate", args.data, run_dir)
+    logger.info("  Evaluate: tc-evaluate --data %s --run_dir %s", args.data, run_dir)
+    logger.info("=" * 70)
 
     return run_dir
 
 
-# ── propagate sub-command (Step 7) ─────────────────────────────────────────
+# ── propagate sub-command (Stage 9) ───────────────────────────────────────
 
 def propagate(args) -> None:
-    """Step 7: Propagate prototype labels to the full dataset.
+    """Stage 9: Propagate representative labels to the full dataset.
 
     Reads:
       - ``sealclust_metadata.json``
@@ -291,9 +367,9 @@ def propagate(args) -> None:
     run_dir = args.run_dir
     setup_logging(os.path.join(run_dir, "sealclust_propagate.log"))
 
-    logger.info("=" * 60)
-    logger.info("SEAL-Clust Label Propagation (Step 7)")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("SEALClust Stage 9 — Label Propagation")
+    logger.info("=" * 70)
     logger.info("Run dir: %s", run_dir)
 
     # Load metadata
@@ -304,7 +380,6 @@ def propagate(args) -> None:
     cluster_assignments = np.array(meta["cluster_assignments"])
     medoid_indices_sorted = sorted(meta["medoid_indices"])
     n_documents = meta["n_documents"]
-    k = meta["k"]
 
     # Load dataset
     data_list = load_dataset(args.data_path, args.data, args.use_large)
@@ -332,7 +407,7 @@ def propagate(args) -> None:
                 medoid_labels[med_idx] = label
 
     logger.info(
-        "Resolved labels for %d / %d prototypes",
+        "Resolved labels for %d / %d representatives",
         len(medoid_labels), len(medoid_indices_sorted),
     )
 
@@ -352,15 +427,10 @@ def propagate(args) -> None:
         logger.info("  %-40s %d documents", label, len(members))
 
     total = sum(len(v) for v in full_classifications.values())
-    unlabelled = total - sum(
-        len(v) for k_, v in full_classifications.items() if k_ != "Unsuccessful"
-    )
+    unsuccessful = len(full_classifications.get("Unsuccessful", []))
     logger.info("Propagation complete — %d / %d documents labelled", total, n_documents)
-    if "Unsuccessful" in full_classifications:
-        logger.warning(
-            "  %d documents labelled 'Unsuccessful'",
-            len(full_classifications["Unsuccessful"]),
-        )
+    if unsuccessful:
+        logger.warning("  %d documents labelled 'Unsuccessful'", unsuccessful)
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────
@@ -368,10 +438,13 @@ def propagate(args) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "SEAL-Clust: Scalable Efficient Autonomous LLM Clustering.\n\n"
-            "Full 7-step framework: Embed → t-SNE → Elbow auto-k → K-Medoids → "
-            "Prototype extraction → (LLM labelling) → Label propagation.\n\n"
-            "Use --sealclust_k <N> to skip auto-k and set k manually."
+            "SEALClust — Scalable Efficient Autonomous LLM Clustering.\n\n"
+            "9-Stage pipeline:\n"
+            "  1. Embed  2. DimReduce  3. Overcluster  4. Representatives\n"
+            "  5. Label Discovery  6. BIC K*  7. Consolidate\n"
+            "  8. Classify reps (separate: tc-classify --medoid_mode)\n"
+            "  9. Propagate (--propagate flag)\n\n"
+            "Default: runs Stages 1–7. Use --propagate for Stage 9."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -388,43 +461,63 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--embedding_model", type=str, default=EMBEDDING_MODEL)
     parser.add_argument("--batch_size", type=int, default=64)
 
-    # t-SNE
-    parser.add_argument("--tsne_n_components", type=int, default=TSNE_N_COMPONENTS,
-                        help="t-SNE output dimensionality (default: 2)")
-    parser.add_argument("--tsne_perplexity", type=float, default=TSNE_PERPLEXITY,
-                        help="t-SNE perplexity (default: 30)")
-    parser.add_argument("--tsne_n_iter", type=int, default=TSNE_N_ITER,
-                        help="t-SNE optimisation iterations (default: 1000)")
-    parser.add_argument("--tsne_metric", type=str, default=TSNE_METRIC,
-                        help="t-SNE distance metric (default: cosine)")
+    # Dimensionality reduction
+    parser.add_argument("--reduction", type=str, default=SEALCLUST_REDUCTION,
+                        choices=["pca", "tsne"],
+                        help="Reduction method: pca (default, recommended) or tsne")
+    parser.add_argument("--pca_dims", type=int, default=SEALCLUST_PCA_DIMS,
+                        help="PCA output dimensions (default: 50)")
 
-    # k selection
-    parser.add_argument("--sealclust_k", type=int, default=SEALCLUST_K,
-                        help="Manual k. Set to 0 (default) for Elbow auto-selection.")
-    parser.add_argument("--elbow_k_min", type=int, default=SEALCLUST_ELBOW_K_MIN,
-                        help="Min k for Elbow search (default: 5)")
-    parser.add_argument("--elbow_k_max", type=int, default=SEALCLUST_ELBOW_K_MAX,
-                        help="Max k for Elbow search (default: 200)")
-    parser.add_argument("--elbow_step", type=int, default=SEALCLUST_ELBOW_STEP,
-                        help="Step between candidate k values (default: 5)")
+    # t-SNE (when --reduction=tsne)
+    parser.add_argument("--tsne_n_components", type=int, default=TSNE_N_COMPONENTS)
+    parser.add_argument("--tsne_perplexity", type=float, default=TSNE_PERPLEXITY)
+    parser.add_argument("--tsne_n_iter", type=int, default=TSNE_N_ITER)
+    parser.add_argument("--tsne_metric", type=str, default=TSNE_METRIC)
+
+    # Overclustering (K₀)
+    parser.add_argument("--k0", type=int, default=SEALCLUST_K0,
+                        help="Overclustering size K₀ (default: 300)")
+
+    # K* estimation
+    parser.add_argument("--k_star", type=int, default=SEALCLUST_K if SEALCLUST_K > 0 else 0,
+                        help="Manual K* override. 0 = auto via BIC (default).")
+    parser.add_argument("--bic_k_min", type=int, default=SEALCLUST_BIC_K_MIN,
+                        help="Min K for BIC search (default: 5)")
+    parser.add_argument("--bic_k_max", type=int, default=SEALCLUST_BIC_K_MAX,
+                        help="Max K for BIC search (default: 50)")
+
+    # Label discovery
+    parser.add_argument("--label_chunk_size", type=int, default=SEALCLUST_LABEL_CHUNK_SIZE,
+                        help="Representatives per LLM call for label discovery (default: 30)")
 
     # General
     parser.add_argument("--seed", type=int, default=42)
 
-    # Propagation
+    # Propagation (Stage 9)
     parser.add_argument("--propagate", action="store_true",
-                        help="Run label propagation (Step 7) — requires --run_dir")
+                        help="Run Stage 9 (label propagation) — requires --run_dir")
+
+    # Legacy compatibility
+    parser.add_argument("--sealclust_k", type=int, default=0,
+                        help="Legacy: same as --k_star (backward compatibility)")
+    parser.add_argument("--elbow_k_min", type=int, default=5, help=argparse.SUPPRESS)
+    parser.add_argument("--elbow_k_max", type=int, default=200, help=argparse.SUPPRESS)
+    parser.add_argument("--elbow_step", type=int, default=5, help=argparse.SUPPRESS)
 
     return parser
 
 
 def main(args) -> None:
+    # Legacy compatibility: --sealclust_k maps to --k_star
+    if args.sealclust_k > 0 and not args.k_star:
+        args.k_star = args.sealclust_k
+
     if args.propagate:
         if not args.run_dir:
             raise SystemExit("--run_dir is required when --propagate is set")
         propagate(args)
     else:
-        precluster(args)
+        run_pipeline(args)
 
 
 def main_cli() -> None:

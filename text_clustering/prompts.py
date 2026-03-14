@@ -60,3 +60,64 @@ def prompt_construct_classify(label_list, sentence):
     prompt += f"Sentence:{sentence}.\n"
     prompt += f"You should only return the label name, please return in json format like: {json_example}"
     return prompt
+
+
+# ---------------------------------------------------------------------------
+# SEALClust-specific prompts
+# ---------------------------------------------------------------------------
+
+def prompt_discover_labels(representative_texts: list[str]) -> str:
+    """Stage 5 — Label Discovery.
+
+    Send a batch of representative documents to the LLM and ask it to
+    propose semantic labels/topics that describe the data.
+
+    Unlike the original ``prompt_construct_generate_label`` which uses seed
+    labels and incrementally grows a label set, this prompt is *seed-free*:
+    the LLM sees only representative documents and freely discovers topics.
+    """
+    json_example = {"labels": ["label name 1", "label name 2", "..."]}
+    prompt = (
+        "You are an expert text analyst. Below are representative documents sampled "
+        "from a large text dataset. Each document represents a cluster of similar texts.\n\n"
+        "Your task is to read all these documents and propose a list of meaningful, "
+        "descriptive topic labels that capture the main themes present in the data.\n\n"
+        "Guidelines:\n"
+        "- Each label should be a short, descriptive phrase (2-5 words).\n"
+        "- Cover all the themes you observe — it is better to propose too many labels than too few.\n"
+        "- Do NOT use generic labels like 'other', 'miscellaneous', or 'unknown'.\n"
+        "- Labels should be mutually exclusive when possible.\n\n"
+        f"Documents:\n"
+    )
+    for i, text in enumerate(representative_texts, 1):
+        prompt += f"{i}. {text}\n"
+    prompt += (
+        f"\nReturn the complete list of proposed labels in JSON format like: {json_example}"
+    )
+    return prompt
+
+
+def prompt_consolidate_labels(label_list: list[str], target_k: int) -> str:
+    """Stage 7 — Final Label Consolidation.
+
+    Given a list of candidate labels and the statistically optimal number of
+    clusters K*, ask the LLM to merge them into exactly K* final labels.
+    """
+    json_example = {"merged_labels": ["label name 1", "label name 2"]}
+    prompt = (
+        f"You are an expert text analyst. You have been given a list of {len(label_list)} "
+        f"candidate topic labels discovered from a text dataset.\n\n"
+        f"A statistical analysis has determined that the optimal number of clusters is "
+        f"**exactly {target_k}**.\n\n"
+        f"Your task is to merge the candidate labels into exactly {target_k} final labels "
+        f"by combining similar, overlapping, or redundant labels into broader categories.\n\n"
+        f"Guidelines:\n"
+        f"- You MUST produce exactly {target_k} labels — no more, no less.\n"
+        f"- Each final label should be a short, descriptive phrase (2-5 words).\n"
+        f"- Merge semantically similar labels together.\n"
+        f"- Every candidate label should be covered by one of the final labels.\n"
+        f"- Do NOT use generic labels like 'other' or 'miscellaneous'.\n\n"
+        f"Candidate labels:\n{label_list}\n\n"
+        f"Return exactly {target_k} merged labels in JSON format like: {json_example}"
+    )
+    return prompt

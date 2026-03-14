@@ -29,14 +29,28 @@ GMM_K: int = int(os.getenv("GMM_K", "100"))             # 0 = auto-select via BI
 GMM_COVARIANCE_TYPE: str = os.getenv("GMM_COVARIANCE_TYPE", "tied")  # full|tied|diag|spherical
 
 # ── SEAL-Clust settings ──────────────────────────────────────────────────
-# t-SNE dimensionality reduction
+# Dimensionality reduction
+SEALCLUST_REDUCTION: str = os.getenv("SEALCLUST_REDUCTION", "pca")  # pca | tsne
+SEALCLUST_PCA_DIMS: int = int(os.getenv("SEALCLUST_PCA_DIMS", "50"))
+
+# t-SNE (legacy / optional)
 TSNE_N_COMPONENTS: int = int(os.getenv("TSNE_N_COMPONENTS", "2"))
 TSNE_PERPLEXITY: float = float(os.getenv("TSNE_PERPLEXITY", "30"))
 TSNE_N_ITER: int = int(os.getenv("TSNE_N_ITER", "1000"))
 TSNE_METRIC: str = os.getenv("TSNE_METRIC", "cosine")
 
-# Clustering & auto-k
-SEALCLUST_K: int = int(os.getenv("SEALCLUST_K", "0"))   # 0 = auto (Elbow method)
+# Overclustering (K₀)
+SEALCLUST_K0: int = int(os.getenv("SEALCLUST_K0", "300"))  # initial overcluster count
+
+# BIC-based optimal K* estimation
+SEALCLUST_BIC_K_MIN: int = int(os.getenv("SEALCLUST_BIC_K_MIN", "5"))
+SEALCLUST_BIC_K_MAX: int = int(os.getenv("SEALCLUST_BIC_K_MAX", "50"))
+
+# Legacy Elbow settings (kept for backward compatibility)
+SEALCLUST_K: int = int(os.getenv("SEALCLUST_K", "0"))   # 0 = auto (BIC), >0 = manual K*
 SEALCLUST_ELBOW_K_MIN: int = int(os.getenv("SEALCLUST_ELBOW_K_MIN", "5"))
 SEALCLUST_ELBOW_K_MAX: int = int(os.getenv("SEALCLUST_ELBOW_K_MAX", "200"))
 SEALCLUST_ELBOW_STEP: int = int(os.getenv("SEALCLUST_ELBOW_STEP", "5"))
+
+# Label generation chunk size for representative batches
+SEALCLUST_LABEL_CHUNK_SIZE: int = int(os.getenv("SEALCLUST_LABEL_CHUNK_SIZE", "30"))

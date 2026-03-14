@@ -203,14 +203,17 @@ endif
 # ── SEAL-Clust full framework ───────────────────────────────────────────
 
 # usage: make run-sealclust data=massive_scenario
-#        make run-sealclust data=massive_scenario k=80   (manual k)
-# k=0 (default) → auto-k via Elbow method
+#        make run-sealclust data=massive_scenario k0=200  (custom K₀)
+#        make run-sealclust data=massive_scenario kstar=18 (manual K*)
+# Default: Stages 1–7 (Embed + PCA + Overcluster + Label Discovery + BIC + Consolidate)
+k0 ?= 300
+kstar ?= 0
 run-sealclust:
 ifndef data
 	$(error data is required, e.g. make run-sealclust data=massive_scenario)
 endif
 	mkdir -p logs
-	.venv/bin/tc-sealclust --data $(data) --sealclust_k $(k) 2>&1 | tee logs/$(data)_sealclust.log
+	.venv/bin/tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) 2>&1 | tee logs/$(data)_sealclust.log
 
 # usage: make run-sealclust-classify data=massive_scenario run=./runs/<run_dir>
 run-sealclust-classify:

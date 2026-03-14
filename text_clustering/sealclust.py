@@ -1,30 +1,42 @@
 """
-sealclust.py — SEAL-Clust core: auto-k via Elbow method + clustering helpers.
+sealclust.py — SEAL-Clust core algorithms.
 
-This module implements the *automatic determination of k* step in the
-SEAL-Clust framework.  It uses the **Elbow method** on K-Medoids inertia
-(sum of distances to medoids) to find the best k, with a manual fallback.
+This module implements the core computational steps of the SEAL-Clust
+(Scalable Efficient Autonomous LLM Clustering) framework:
 
-The Elbow method
-----------------
-For each candidate k we fit K-Medoids and record the inertia (within-cluster
-sum of distances).  The "elbow" — the point of maximum curvature in the
-inertia-vs-k curve — is detected using the *Kneedle* algorithm (second
-derivative / geometric approach).
-
-If the automatic detection fails or the user wants to override, a manual k
-can be supplied via ``--sealclust_k``.
+  1. **Overclustering** — K-Medoids with a large K₀ to create micro-clusters
+  2. **Elbow-based k selection** — legacy method (Kneedle algorithm)
+  3. **BIC-based K* estimation** — run GMM on representative embeddings
+     and select the K that minimises the Bayesian Information Criterion
+  4. **Label discovery** — send representative texts to the LLM in batches
+  5. **Label consolidation** — merge candidate labels to exactly K* via LLM
+  6. **Prototype extraction** and **label propagation**
 
 Functions
 ---------
+run_sealclust_clustering(embeddings, k, ...)
+    Run K-Medoids overclustering.
+
+estimate_k_star_bic(representative_embeddings, k_min, k_max, ...)
+    GMM + BIC on representative embeddings → optimal K*.
+
+discover_labels(representative_texts, client, chunk_size)
+    LLM label discovery from representative documents only.
+
+consolidate_labels(candidate_labels, k_star, client)
+    LLM label consolidation to exactly K* labels.
+
 elbow_select_k(embeddings, k_range, ...)
-    Try each k, fit K-Medoids, record inertia, find the elbow.
+    Legacy: Elbow method auto-k selection.
 
 find_elbow(k_values, inertias)
-    Geometric Kneedle algorithm to detect the elbow point.
+    Legacy: geometric Kneedle algorithm.
 
-run_sealclust_clustering(embeddings, k, ...)
-    Convenience wrapper: run K-Medoids with the chosen k.
+get_prototypes(documents, medoid_indices)
+    Extract prototype documents at medoid positions.
+
+propagate_labels(medoid_labels, cluster_assignments, n_documents)
+    Map prototype labels to all documents via cluster membership.
 """
 
 from __future__ import annotations
@@ -34,6 +46,247 @@ import logging
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# BIC-based K* estimation (Stage 6)
+# ---------------------------------------------------------------------------
+
+def estimate_k_star_bic(
+    representative_embeddings: np.ndarray,
+    k_min: int = 5,
+    k_max: int = 50,
+    covariance_type: str = "tied",
+    random_state: int = 42,
+    max_iter: int = 300,
+    n_init: int = 3,
+) -> tuple[int, dict[int, float]]:
+    """Estimate optimal K* using GMM + BIC on representative embeddings.
+
+    This implements Stage 6 of SEALClust: run GMM for each candidate K on
+    the K₀ representative embeddings and select the K that minimises BIC.
+
+    Parameters
+    ----------
+    representative_embeddings : np.ndarray
+        Shape ``(K₀, dim)`` — embeddings of representative documents only.
+    k_min : int
+        Minimum candidate K.
+    k_max : int
+        Maximum candidate K.  Will be clamped to K₀ - 1.
+    covariance_type : str
+        GMM covariance type: ``"full"`` | ``"tied"`` | ``"diag"`` | ``"spherical"``.
+    random_state : int
+        Seed for reproducibility.
+
+    Returns
+    -------
+    k_star : int
+        The K that minimises BIC.
+    bic_scores : dict[int, float]
+        ``{k: bic_score}`` for every K tried.
+    """
+    from sklearn.mixture import GaussianMixture
+    from sklearn.preprocessing import normalize
+
+    n_reps = representative_embeddings.shape[0]
+    # Clamp k_max to n_reps - 1  (GMM needs n_components < n_samples)
+    k_max = min(k_max, n_reps - 1)
+    if k_min > k_max:
+        k_min = max(2, k_max // 2)
+
+    # L2-normalise so Euclidean ≈ cosine
+    emb_norm = normalize(representative_embeddings, norm="l2")
+
+    logger.info(
+        "Stage 6: Estimating K* via GMM+BIC on %d representative embeddings (dim=%d)",
+        n_reps, emb_norm.shape[1],
+    )
+    logger.info("  Candidate range: K ∈ [%d, %d], covariance_type=%s", k_min, k_max, covariance_type)
+
+    bic_scores: dict[int, float] = {}
+    for k in range(k_min, k_max + 1):
+        try:
+            gmm = GaussianMixture(
+                n_components=k,
+                covariance_type=covariance_type,
+                max_iter=max_iter,
+                n_init=n_init,
+                random_state=random_state,
+            )
+            gmm.fit(emb_norm)
+            bic = gmm.bic(emb_norm)
+            bic_scores[k] = float(bic)
+            logger.info("  K=%d  BIC=%.2f", k, bic)
+        except Exception as e:
+            logger.warning("  K=%d  GMM failed: %s", k, e)
+            continue
+
+    if not bic_scores:
+        logger.warning("All GMM fits failed — defaulting K*=%d", k_min)
+        return k_min, {}
+
+    k_star = min(bic_scores, key=bic_scores.get)  # type: ignore[arg-type]
+    logger.info("Stage 6: K* = %d (BIC=%.2f)", k_star, bic_scores[k_star])
+    return k_star, bic_scores
+
+
+# ---------------------------------------------------------------------------
+# LLM Label Discovery (Stage 5) — on representatives only
+# ---------------------------------------------------------------------------
+
+def discover_labels(
+    representative_texts: list[str],
+    client,
+    chunk_size: int = 30,
+) -> list[str]:
+    """Send representative documents to the LLM in batches to discover labels.
+
+    Unlike the original label_generation which sends ALL documents, this sends
+    only the K₀ representative texts — dramatically reducing LLM calls.
+
+    Parameters
+    ----------
+    representative_texts : list[str]
+        Texts of the K₀ representative documents.
+    client : OpenAI client
+        Initialised LLM client.
+    chunk_size : int
+        Number of representative texts per LLM call.
+
+    Returns
+    -------
+    list[str]
+        All unique candidate labels discovered.
+    """
+    from text_clustering.llm import chat
+    from text_clustering.prompts import prompt_discover_labels
+
+    all_labels: list[str] = []
+    n_chunks = (len(representative_texts) + chunk_size - 1) // chunk_size
+
+    logger.info(
+        "Stage 5: Discovering labels from %d representatives in %d chunks (chunk_size=%d)",
+        len(representative_texts), n_chunks, chunk_size,
+    )
+
+    for i in range(0, len(representative_texts), chunk_size):
+        chunk = representative_texts[i : i + chunk_size]
+        prompt = prompt_discover_labels(chunk)
+        raw = chat(prompt, client, max_tokens=4096)
+        if raw is None:
+            logger.warning("  Chunk %d: LLM returned None — skipping", i // chunk_size + 1)
+            continue
+
+        try:
+            parsed = eval(raw)  # noqa: S307
+        except Exception:
+            logger.warning("  Chunk %d: could not parse LLM response — skipping", i // chunk_size + 1)
+            continue
+
+        # Handle both {"labels": [...]} and flat list [...]
+        if isinstance(parsed, dict):
+            for val in parsed.values():
+                if isinstance(val, list):
+                    for label in val:
+                        if isinstance(label, str) and label not in all_labels:
+                            all_labels.append(label)
+        elif isinstance(parsed, list):
+            for label in parsed:
+                if isinstance(label, str) and label not in all_labels:
+                    all_labels.append(label)
+
+        logger.info("  Chunk %d/%d — labels so far: %d", i // chunk_size + 1, n_chunks, len(all_labels))
+
+    logger.info("Stage 5: Discovered %d unique candidate labels", len(all_labels))
+    return all_labels
+
+
+# ---------------------------------------------------------------------------
+# LLM Label Consolidation (Stage 7) — merge to exactly K*
+# ---------------------------------------------------------------------------
+
+def consolidate_labels(
+    candidate_labels: list[str],
+    k_star: int,
+    client,
+) -> list[str]:
+    """Merge candidate labels into exactly K* final labels using the LLM.
+
+    Parameters
+    ----------
+    candidate_labels : list[str]
+        All candidate labels from Stage 5 (may be hundreds).
+    k_star : int
+        The statistically optimal number of clusters from Stage 6.
+    client : OpenAI client
+
+    Returns
+    -------
+    list[str]
+        Exactly K* merged labels (or best effort).
+    """
+    from text_clustering.llm import chat
+    from text_clustering.prompts import prompt_consolidate_labels
+
+    logger.info(
+        "Stage 7: Consolidating %d candidate labels into exactly K*=%d labels",
+        len(candidate_labels), k_star,
+    )
+
+    prompt = prompt_consolidate_labels(candidate_labels, k_star)
+    raw = chat(prompt, client, max_tokens=4096)
+
+    if raw is None:
+        logger.error("Stage 7: LLM returned None — returning unmerged labels")
+        return candidate_labels
+
+    try:
+        parsed = eval(raw)  # noqa: S307
+    except Exception:
+        logger.error("Stage 7: could not parse LLM response — returning unmerged labels")
+        return candidate_labels
+
+    # Extract labels from response
+    final_labels: list[str] = []
+    if isinstance(parsed, dict):
+        for val in parsed.values():
+            if isinstance(val, list):
+                final_labels.extend(val)
+    elif isinstance(parsed, list):
+        final_labels = [x for x in parsed if isinstance(x, str)]
+
+    if not final_labels:
+        logger.error("Stage 7: parsed empty label list — returning unmerged labels")
+        return candidate_labels
+
+    logger.info(
+        "Stage 7: Consolidated %d → %d labels (target was %d)",
+        len(candidate_labels), len(final_labels), k_star,
+    )
+
+    # If the LLM didn't produce exactly K*, try a second pass
+    if len(final_labels) != k_star and abs(len(final_labels) - k_star) > 2:
+        logger.info("Stage 7: Second consolidation pass (got %d, want %d)", len(final_labels), k_star)
+        prompt2 = prompt_consolidate_labels(final_labels, k_star)
+        raw2 = chat(prompt2, client, max_tokens=4096)
+        if raw2:
+            try:
+                parsed2 = eval(raw2)  # noqa: S307
+                labels2: list[str] = []
+                if isinstance(parsed2, dict):
+                    for val in parsed2.values():
+                        if isinstance(val, list):
+                            labels2.extend(val)
+                elif isinstance(parsed2, list):
+                    labels2 = [x for x in parsed2 if isinstance(x, str)]
+                if labels2:
+                    logger.info("Stage 7: Second pass produced %d labels", len(labels2))
+                    final_labels = labels2
+            except Exception:
+                pass
+
+    return final_labels
 
 
 # ---------------------------------------------------------------------------
