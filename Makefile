@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate
+.PHONY: help setup lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate
 
 help:
 	@echo "Usage: make <target>"
@@ -29,6 +29,15 @@ help:
 	@echo "  run-gmm-propagate data=<d> run=<run_dir>"
 	@echo "                                     propagate labels → full dataset"
 	@echo ""
+	@echo "  ── SEAL-Clust full framework ──"
+	@echo "  run-sealclust data=<d> [k=0]       embed + t-SNE + elbow auto-k + K-Medoids"
+	@echo "                                     k=0 (default) → auto-k via Elbow"
+	@echo "                                     k=N → manual k, skip Elbow"
+	@echo "  run-sealclust-classify data=<d> run=<run_dir>"
+	@echo "                                     classify prototypes (--medoid_mode)"
+	@echo "  run-sealclust-propagate data=<d> run=<run_dir>"
+	@echo "                                     propagate labels → full dataset"
+	@echo ""
 	@echo "  Example (K-Medoids pipeline):"
 	@echo "    make run-kmedoids data=massive_scenario k=100"
 	@echo "    make run-step1 data=massive_scenario"
@@ -41,6 +50,13 @@ help:
 	@echo "    make run-step1 data=massive_scenario"
 	@echo "    make run-gmm-classify data=massive_scenario run=./runs/<run_dir>"
 	@echo "    make run-gmm-propagate data=massive_scenario run=./runs/<run_dir>"
+	@echo "    make run-step3 data=massive_scenario run=./runs/<run_dir>"
+	@echo ""
+	@echo "  Example (SEAL-Clust pipeline, auto-k):"
+	@echo "    make run-sealclust data=massive_scenario"
+	@echo "    make run-step1 data=massive_scenario"
+	@echo "    make run-sealclust-classify data=massive_scenario run=./runs/<run_dir>"
+	@echo "    make run-sealclust-propagate data=massive_scenario run=./runs/<run_dir>"
 	@echo "    make run-step3 data=massive_scenario run=./runs/<run_dir>"
 	@echo ""
 
@@ -183,3 +199,38 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
 endif
 	.venv/bin/tc-gmm --data $(data) --run_dir $(run) --propagate
+
+# ── SEAL-Clust full framework ───────────────────────────────────────────
+
+# usage: make run-sealclust data=massive_scenario
+#        make run-sealclust data=massive_scenario k=80   (manual k)
+# k=0 (default) → auto-k via Elbow method
+run-sealclust:
+ifndef data
+	$(error data is required, e.g. make run-sealclust data=massive_scenario)
+endif
+	mkdir -p logs
+	.venv/bin/tc-sealclust --data $(data) --sealclust_k $(k) 2>&1 | tee logs/$(data)_sealclust.log
+
+# usage: make run-sealclust-classify data=massive_scenario run=./runs/<run_dir>
+run-sealclust-classify:
+ifndef data
+	$(error data is required)
+endif
+ifndef run
+	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
+endif
+	mkdir -p logs
+	nohup .venv/bin/tc-classify --data $(data) --run_dir $(run) --medoid_mode \
+		>> logs/$(data)_sealclust_classification.log 2>&1 &
+	@echo "running in background — tail -f logs/$(data)_sealclust_classification.log"
+
+# usage: make run-sealclust-propagate data=massive_scenario run=./runs/<run_dir>
+run-sealclust-propagate:
+ifndef data
+	$(error data is required)
+endif
+ifndef run
+	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
+endif
+	.venv/bin/tc-sealclust --data $(data) --run_dir $(run) --propagate

@@ -1,1 +1,1 @@
-"""text_clustering.pipeline — The four pipeline steps + K-Medoids pre-clustering."""
+"""text_clustering.pipeline — Pipeline steps + K-Medoids / GMM / SEAL-Clust pre-clustering."""
