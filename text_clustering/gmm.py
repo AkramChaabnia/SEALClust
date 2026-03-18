@@ -43,8 +43,8 @@ import logging
 from typing import Literal
 
 import numpy as np
-from sklearn.mixture import GaussianMixture
 from sklearn.metrics import silhouette_score
+from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import normalize
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,11 @@ def auto_select_k(
             if len(set(labels)) < 2:
                 score = -1.0
             else:
-                score = silhouette_score(emb_norm, labels, metric="euclidean", sample_size=min(5000, len(labels)))
+                score = silhouette_score(
+                    emb_norm, labels,
+                    metric="euclidean",
+                    sample_size=min(5000, len(labels)),
+                )
 
         scores[k] = score
         logger.info("  k=%d  %s=%.2f", k, criterion, score)

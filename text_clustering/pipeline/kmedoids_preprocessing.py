@@ -140,7 +140,10 @@ def precluster(args) -> str:
             meta = json.load(f)
         cluster_labels = np.array(meta["cluster_assignments"])
         medoid_indices = np.array(meta["medoid_indices"])
-        logger.info("[checkpoint] Loaded %d clusters, %d medoids", args.kmedoids_k, len(medoid_indices))
+        logger.info(
+            "[checkpoint] Loaded %d clusters, %d medoids",
+            args.kmedoids_k, len(medoid_indices),
+        )
     else:
         cluster_labels, medoid_indices = run_kmedoids(
             embeddings,

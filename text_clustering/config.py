@@ -45,7 +45,9 @@ SEALCLUST_K0: int = int(os.getenv("SEALCLUST_K0", "300"))  # initial overcluster
 # BIC-based optimal K* estimation
 SEALCLUST_BIC_K_MIN: int = int(os.getenv("SEALCLUST_BIC_K_MIN", "5"))
 SEALCLUST_BIC_K_MAX: int = int(os.getenv("SEALCLUST_BIC_K_MAX", "50"))
-SEALCLUST_K_METHOD: str = os.getenv("SEALCLUST_K_METHOD", "silhouette")  # silhouette | bic | ensemble
+SEALCLUST_K_METHOD: str = os.getenv(
+    "SEALCLUST_K_METHOD", "silhouette",
+)  # silhouette | bic | ensemble
 
 # Legacy Elbow settings (kept for backward compatibility)
 SEALCLUST_K: int = int(os.getenv("SEALCLUST_K", "0"))   # 0 = auto (BIC), >0 = manual K*

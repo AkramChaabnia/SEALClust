@@ -183,7 +183,10 @@ def propagate_labels(
         all_labels.append(label)
 
     if unlabelled:
-        logger.warning("%d/%d documents received no label (cluster had no medoid label)", unlabelled, n_documents)
+        logger.warning(
+            "%d/%d documents received no label (cluster had no medoid label)",
+            unlabelled, n_documents,
+        )
     else:
         logger.info("All %d documents labelled via propagation", n_documents)
 

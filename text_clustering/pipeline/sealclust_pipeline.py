@@ -73,34 +73,32 @@ import numpy as np
 
 from text_clustering.config import (
     EMBEDDING_MODEL,
-    SEALCLUST_K0,
-    SEALCLUST_BIC_K_MIN,
     SEALCLUST_BIC_K_MAX,
-    SEALCLUST_K_METHOD,
-    SEALCLUST_REDUCTION,
-    SEALCLUST_PCA_DIMS,
-    SEALCLUST_LABEL_CHUNK_SIZE,
+    SEALCLUST_BIC_K_MIN,
     SEALCLUST_K,
-    TSNE_N_COMPONENTS,
-    TSNE_PERPLEXITY,
-    TSNE_N_ITER,
+    SEALCLUST_K0,
+    SEALCLUST_K_METHOD,
+    SEALCLUST_LABEL_CHUNK_SIZE,
+    SEALCLUST_PCA_DIMS,
+    SEALCLUST_REDUCTION,
     TSNE_METRIC,
+    TSNE_N_COMPONENTS,
+    TSNE_N_ITER,
+    TSNE_PERPLEXITY,
 )
 from text_clustering.data import load_dataset
+from text_clustering.dimreduce import reduce_pca, reduce_tsne
 from text_clustering.embedding import compute_embeddings
-from text_clustering.dimreduce import reduce_tsne, reduce_pca
-from text_clustering.sealclust import (
-    run_sealclust_clustering,
-    estimate_k_star,
-    estimate_k_star_bic,
-    estimate_k_star_calinski,
-    discover_labels,
-    consolidate_labels,
-    get_prototypes,
-    propagate_labels,
-)
 from text_clustering.kmedoids import build_cluster_map
 from text_clustering.logging_config import setup_logging
+from text_clustering.sealclust import (
+    consolidate_labels,
+    discover_labels,
+    estimate_k_star,
+    get_prototypes,
+    propagate_labels,
+    run_sealclust_clustering,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -266,12 +264,10 @@ def run_pipeline(args) -> str:
     # statistical power.  The full dataset has clearer cluster structure than
     # the K₀ medoids which are already fragmented by overclustering.
     medoid_indices_sorted = sorted(int(i) for i in medoid_indices)
-    representative_embeddings = embeddings_reduced[medoid_indices_sorted]
 
     if args.k_star:
         k_star = args.k_star
         logger.info("Stage 6: Using manual K*=%d (estimation skipped)", k_star)
-        bic_scores = {}
     else:
         logger.info("Stage 6: Estimating K* via %s on %d FULL embeddings (dim=%d) …",
                     args.k_method, embeddings_reduced.shape[0], embeddings_reduced.shape[1])
@@ -288,8 +284,19 @@ def run_pipeline(args) -> str:
             "k_min": args.bic_k_min,
             "k_max": args.bic_k_max,
             "n_samples": int(embeddings_reduced.shape[0]),
-            "details": {str(k): v for k, v in k_details.get("scores", k_details.get("silhouette_scores", {})).items()},
-            **{k: v for k, v in k_details.items() if k not in ("scores", "silhouette_scores", "bic_scores", "calinski_scores")},
+            "details": {
+                str(k): v
+                for k, v in k_details.get(
+                    "scores", k_details.get("silhouette_scores", {}),
+                ).items()
+            },
+            **{
+                k: v for k, v in k_details.items()
+                if k not in (
+                    "scores", "silhouette_scores",
+                    "bic_scores", "calinski_scores",
+                )
+            },
         })
 
     # ── Stage 7: Label Consolidation — merge to exactly K* ──
@@ -467,8 +474,6 @@ def run_full_pipeline(args) -> None:
       Stage 9    : Propagate representative labels to all documents
       Evaluation : Compute ACC, NMI, ARI against ground truth
     """
-    import subprocess
-    import sys
 
     full_start = time.time()
 
@@ -481,7 +486,8 @@ def run_full_pipeline(args) -> None:
     logger.info("SEALClust Stage 8 — Classify Representatives")
     logger.info("=" * 70)
 
-    from text_clustering.pipeline.classification import main as classify_main, build_parser as classify_parser
+    from text_clustering.pipeline.classification import build_parser as classify_parser
+    from text_clustering.pipeline.classification import main as classify_main
     classify_args = classify_parser().parse_args([
         "--data", args.data,
         "--run_dir", run_dir,
@@ -502,7 +508,8 @@ def run_full_pipeline(args) -> None:
     logger.info("SEALClust — Evaluation")
     logger.info("=" * 70)
 
-    from text_clustering.pipeline.evaluation import main as eval_main, build_parser as eval_parser
+    from text_clustering.pipeline.evaluation import build_parser as eval_parser
+    from text_clustering.pipeline.evaluation import main as eval_main
     eval_args = eval_parser().parse_args([
         "--data", args.data,
         "--run_dir", run_dir,
@@ -598,8 +605,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Manual K* override. 0 = auto via selected method (default).")
     parser.add_argument("--k_method", type=str, default=SEALCLUST_K_METHOD,
                         choices=["silhouette", "calinski", "bic", "ensemble"],
-                        help="K* estimation method: silhouette (default, elbow on silhouette curve), "
-                             "calinski (CH variance-ratio), bic (GMM+BIC), or ensemble (median of all)")
+                        help="K* estimation method: silhouette (default), "
+                             "calinski, bic, or ensemble (median of all)")
     parser.add_argument("--bic_k_min", type=int, default=SEALCLUST_BIC_K_MIN,
                         help="Min K for K* search (default: 5)")
     parser.add_argument("--bic_k_max", type=int, default=SEALCLUST_BIC_K_MAX,
@@ -618,7 +625,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Full end-to-end mode (Stages 1-9 + evaluation)
     parser.add_argument("--full", action="store_true",
-                        help="Run the full pipeline end-to-end: Stages 1-9 + evaluation in one command")
+                        help="Run the full pipeline end-to-end: "
+                             "Stages 1-9 + evaluation in one command")
 
     # Legacy compatibility
     parser.add_argument("--sealclust_k", type=int, default=0,

@@ -43,7 +43,7 @@ from datetime import datetime
 
 import numpy as np
 
-from text_clustering.config import EMBEDDING_MODEL, GMM_K, GMM_COVARIANCE_TYPE
+from text_clustering.config import EMBEDDING_MODEL, GMM_COVARIANCE_TYPE, GMM_K
 from text_clustering.data import load_dataset
 from text_clustering.embedding import compute_embeddings
 from text_clustering.gmm import (
@@ -104,7 +104,10 @@ def precluster(args) -> str:
 
     logger.info("=== GMM Pre-Clustering ===")
     logger.info("Dataset : %s  |  split: %s", args.data, size)
-    logger.info("GMM k   : %s", args.gmm_k if args.gmm_k else f"auto [{args.gmm_k_min}-{args.gmm_k_max}]")
+    logger.info(
+        "GMM k   : %s",
+        args.gmm_k if args.gmm_k else f"auto [{args.gmm_k_min}-{args.gmm_k_max}]",
+    )
     logger.info("Cov type: %s", args.covariance_type)
     logger.info("Embed   : %s", args.embedding_model)
     logger.info("Run dir : %s", run_dir)
@@ -140,7 +143,10 @@ def precluster(args) -> str:
         means = np.array(meta["component_means"]) if "component_means" in meta else None
         probs = None  # will be recomputed if needed during propagation
         representative_indices = np.array(meta["representative_indices"])
-        logger.info("[checkpoint] Loaded GMM: k=%d, %d representatives", k, len(representative_indices))
+        logger.info(
+            "[checkpoint] Loaded GMM: k=%d, %d representatives",
+            k, len(representative_indices),
+        )
     else:
         # Auto-select k or use fixed
         if args.gmm_k:
@@ -208,7 +214,11 @@ def precluster(args) -> str:
                 len(data_list), len(representative_indices),
                 len(data_list) / max(len(representative_indices), 1))
     logger.info("  Run dir: %s", run_dir)
-    logger.info("  Next: run tc-label-gen --run_dir %s  then  tc-classify --run_dir %s --representative_mode", run_dir, run_dir)
+    logger.info(
+        "  Next: run tc-label-gen --run_dir %s  then  "
+        "tc-classify --run_dir %s --representative_mode",
+        run_dir, run_dir,
+    )
 
     return run_dir
 
@@ -336,7 +346,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--soft", action="store_true",
                         help="Use soft (probability-weighted) propagation instead of hard")
     parser.add_argument("--confidence_threshold", type=float, default=0.4,
-                        help="Min posterior probability for soft propagation (below → Unsuccessful)")
+                        help="Min posterior probability for soft propagation "
+                             "(below → Unsuccessful)")
 
     return parser
 
