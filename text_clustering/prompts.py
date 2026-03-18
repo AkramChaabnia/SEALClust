@@ -63,6 +63,112 @@ def prompt_construct_classify(label_list, sentence):
 
 
 # ---------------------------------------------------------------------------
+# Hybrid pipeline prompts
+# ---------------------------------------------------------------------------
+
+def prompt_hybrid_generate_labels(sentence_list: list[str]) -> str:
+    """Step 1 of the Hybrid pipeline — generate one-word general labels.
+
+    Given a batch of documents, ask the LLM to assign one general one-word
+    label to each document.  No seed labels are provided — the LLM freely
+    discovers topics.
+
+    Returns a prompt string that asks for a JSON response mapping each
+    document index to its one-word label.
+    """
+    json_example = {"labels": ["Technology", "Sports", "Finance"]}
+    prompt = (
+        "You are an expert text classifier. For each of the following documents, "
+        "assign exactly ONE label.\n\n"
+        "Rules:\n"
+        "- Each label must be exactly ONE word.\n"
+        "- Labels must be as GENERAL as possible (broad categories, not specific topics).\n"
+        "- Reuse the same label for documents that belong to the same category.\n"
+        "- Do NOT use generic labels like 'Other', 'Miscellaneous', or 'Unknown'.\n\n"
+        "Documents:\n"
+    )
+    for i, text in enumerate(sentence_list, 1):
+        prompt += f"{i}. {text}\n"
+    prompt += (
+        f"\nReturn a JSON object with a 'labels' key containing a list of labels "
+        f"(one per document, in the same order) like: {json_example}"
+    )
+    return prompt
+
+
+def prompt_hybrid_reduce_labels(label_list: list[str]) -> str:
+    """Step 3 of the Hybrid pipeline — merge semantically similar labels.
+
+    Given K0 labels (potentially hundreds), ask the LLM to merge synonyms,
+    variations, and closely related labels into a reduced set K1.
+    """
+    json_example = {"merged_labels": ["Technology", "Sports", "Finance"]}
+    prompt = (
+        "You are an expert text analyst. You are given a list of one-word labels "
+        "that were generated for a text classification task.\n\n"
+        "Your task is to merge labels that are semantically similar, synonymous, "
+        "or refer to the same concept into a single representative label.\n\n"
+        "Rules:\n"
+        "- Each final label must be exactly ONE word.\n"
+        "- Merge aggressively — combine all synonyms and near-synonyms.\n"
+        "- Keep labels as general as possible.\n"
+        "- Do NOT create new labels that weren't implied by the originals.\n"
+        "- Do NOT use 'Other', 'Miscellaneous', or 'Unknown'.\n\n"
+        f"Labels to merge:\n{label_list}\n\n"
+        f"Return the merged list in JSON format like: {json_example}"
+    )
+    return prompt
+
+
+def prompt_hybrid_align_labels(
+    label_list: list[str], target_k: int,
+) -> str:
+    """Step 5 of the Hybrid pipeline — force labels to exactly target_k.
+
+    Given a set of labels and the target number of categories, ask the LLM
+    to merge/split until exactly target_k labels remain.
+    """
+    json_example = {"aligned_labels": ["label1", "label2"]}
+    prompt = (
+        f"You are an expert text analyst. You have {len(label_list)} labels "
+        f"but need exactly {target_k} final labels.\n\n"
+        f"Current labels:\n{label_list}\n\n"
+        f"Your task is to merge or group these labels into exactly {target_k} "
+        f"final labels.\n\n"
+        f"Rules:\n"
+        f"- You MUST produce exactly {target_k} labels — no more, no less.\n"
+        f"- Each label should be a short, descriptive phrase (1-3 words).\n"
+        f"- Merge semantically similar labels together.\n"
+        f"- Every original label should be covered by one of the final labels.\n"
+        f"- Do NOT use 'Other', 'Miscellaneous', or 'Unknown'.\n\n"
+        f"Return exactly {target_k} labels in JSON format like: {json_example}"
+    )
+    return prompt
+
+
+def prompt_hybrid_classify_medoid(
+    label_list: list[str], document: str,
+) -> str:
+    """Step 7 of the Hybrid pipeline — assign a label to a medoid document.
+
+    Given the final label set and a single medoid document, ask the LLM to
+    pick the most relevant label.
+    """
+    json_example = {"label": "Technology"}
+    prompt = (
+        "You are an expert text classifier. Assign exactly one label from the "
+        "list below to the given document.\n\n"
+        f"Available labels: {label_list}\n\n"
+        f"Document: {document}\n\n"
+        "Rules:\n"
+        "- You MUST choose a label from the list above.\n"
+        "- Pick the label that best describes the document's main topic.\n"
+        f"- Return in JSON format like: {json_example}"
+    )
+    return prompt
+
+
+# ---------------------------------------------------------------------------
 # SEALClust-specific prompts
 # ---------------------------------------------------------------------------
 

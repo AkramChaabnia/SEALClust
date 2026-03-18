@@ -57,3 +57,9 @@ SEALCLUST_ELBOW_STEP: int = int(os.getenv("SEALCLUST_ELBOW_STEP", "5"))
 
 # Label generation chunk size for representative batches
 SEALCLUST_LABEL_CHUNK_SIZE: int = int(os.getenv("SEALCLUST_LABEL_CHUNK_SIZE", "30"))
+
+# ── Hybrid pipeline settings ─────────────────────────────────────────────
+HYBRID_LLM_BATCH_SIZE: int = int(os.getenv("HYBRID_LLM_BATCH_SIZE", "30"))
+HYBRID_P: float = float(os.getenv("HYBRID_P", "0.1"))  # overclustering proportion
+HYBRID_K_MIN: int = int(os.getenv("HYBRID_K_MIN", "2"))
+HYBRID_K_MAX: int = int(os.getenv("HYBRID_K_MAX", "50"))

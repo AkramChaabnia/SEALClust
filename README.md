@@ -4,7 +4,7 @@
 > Based on: [Text Clustering as Classification with LLMs](https://arxiv.org/abs/2410.00927) (Chen Huang, Guoxiu He, 2024)  
 > Original code: [ECNU-Text-Computing/Text-Clustering-via-LLM](https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM)
 
-This repository reproduces the paper's baseline and introduces **SEAL-Clust** (**S**calable **E**fficient **A**utonomous **L**LM **Clust**ering) — a 9-stage pipeline that reduces LLM cost by **10×** while maintaining competitive accuracy through overclustering + representative-based label discovery.
+This repository reproduces the paper's baseline and introduces **SEAL-Clust** (**S**calable **E**fficient **A**utonomous **L**LM **Clust**ering) — a 9-stage pipeline that reduces LLM cost by **10×** while maintaining competitive accuracy through overclustering + representative-based label discovery. It also provides a **Hybrid Pipeline** that combines LLM-based label generation with embedding-based K optimisation and GMM overclustering, plus **LLM-free baselines** (KMeans / GMM) for benchmarking.
 
 For the full research log — experimental results, code fixes, model investigation, and key findings — see [FINDINGS.md](./FINDINGS.md).
 
@@ -307,12 +307,115 @@ conda run -n ppd tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 
 ---
 
+### Mode F — Hybrid Pipeline (LLM + Embedding Optimisation)
+
+Combines LLM semantic label generation with embedding-based K optimisation and GMM overclustering for robust clustering without manual K specification.
+
+**The 8 Steps:**
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  Step 1: LLM Label Generation    Batch texts → one-word labels (K₀)  │
+│  Step 2: Embedding               all-MiniLM-L6-v2 → 384D             │
+│  Step 3: LLM Label Reduction     Merge synonymous labels (K₀ → K₁)   │
+│  Step 4: K Optimisation          KMeans + silhouette sweep → best K   │
+│  Step 5: LLM Label Alignment     Force exactly K labels (K₁ → K)     │
+│  Step 6: GMM Overclustering      p×N micro-clusters + medoid extract  │
+│  Step 7: LLM Medoid Labelling    Classify each medoid → one of K     │
+│  Step 8: Label Propagation       GMM membership → full-dataset labels │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Full Pipeline (one command)
+
+```bash
+# Auto K (silhouette-optimised)
+tc-hybrid --data massive_scenario --full
+
+# Manual target K
+tc-hybrid --data massive_scenario --full --target_k 18
+
+# Custom parameters
+tc-hybrid --data massive_scenario --full --p 0.15 --k_min 3 --k_max 40
+```
+
+#### Step-by-Step
+
+```bash
+# Steps 1–5 (label discovery + K optimisation)
+tc-hybrid --data massive_scenario
+# ⚠️ COPY THE PRINTED RUN DIR
+
+# Inspect intermediate results
+cat ./runs/<run_dir>/hybrid_labels_k1.json | python3 -m json.tool   # reduced labels
+cat ./runs/<run_dir>/hybrid_k_optimisation.json | python3 -m json.tool  # best K
+cat ./runs/<run_dir>/labels_merged.json | python3 -m json.tool       # final labels
+
+# Individual steps
+tc-hybrid --data massive_scenario --step 6 --continue_from ./runs/<run_dir>
+tc-hybrid --data massive_scenario --step 7 --continue_from ./runs/<run_dir>
+tc-hybrid --data massive_scenario --step 8 --continue_from ./runs/<run_dir>
+```
+
+#### Cache Files
+
+| Step | Cache File | If Exists → |
+|:----:|-----------|-------------|
+| 1 | `hybrid_labels_k0.json`, `hybrid_per_doc_labels.json` | Skip LLM label gen |
+| 2 | `embeddings.npy` | Skip embedding |
+| 3 | `hybrid_labels_k1.json` | Skip label reduction |
+| 4 | `hybrid_k_optimisation.json` | Skip K optimisation |
+| 5 | `labels_merged.json` | Skip label alignment |
+| 6 | `hybrid_gmm_metadata.json` | Skip GMM overclustering |
+| 7 | `hybrid_medoid_labels.json` | Skip medoid labelling |
+| 8 | `classifications.json`, `classifications_full.json` | Skip propagation |
+
+**Cost**: ~80–200 LLM calls (depending on dataset size) · **Time**: 5–15 min
+
+---
+
+### Mode G — Baselines (No LLM)
+
+Pure embedding-based clustering for benchmarking. No LLM calls required.
+
+#### KMeans Baseline
+
+```bash
+# Fixed K
+tc-baseline --data massive_scenario --method kmeans --k 18
+
+# Auto-K via silhouette sweep
+tc-baseline --data massive_scenario --method kmeans --auto_k --k_min 5 --k_max 30
+
+# With PCA pre-reduction
+tc-baseline --data massive_scenario --method kmeans --k 18 --pca_dims 50
+```
+
+#### GMM Baseline
+
+```bash
+# Fixed K
+tc-baseline --data massive_scenario --method gmm --k 18
+
+# Auto-K via BIC minimisation
+tc-baseline --data massive_scenario --method gmm --auto_k --k_min 5 --k_max 30
+
+# Custom covariance type
+tc-baseline --data massive_scenario --method gmm --k 18 --covariance_type diag
+```
+
+**Cost**: 0 LLM calls · **Time**: 30s–2min · **Expected ACC**: 30–45% (depends on dataset)
+
+---
+
 ### Mode Quick Reference
 
 | Scenario | Mode | Command |
 |----------|------|---------|
 | **One command, full automation** ⭐ | E | `tc-sealclust --data X --k0 300 --full` |
 | **One command, known K\*** ⭐ | E | `tc-sealclust --data X --k0 300 --k_star N --full` |
+| **Hybrid: LLM + embedding K-opt** | F | `tc-hybrid --data X --full` |
+| **Baseline: no LLM benchmark** | G | `tc-baseline --data X --method kmeans --k N` |
 | Debug / inspect stages | D | `tc-sealclust` → `tc-classify` → `--propagate` |
 | K-Medoids on raw embeddings | B | `tc-kmedoids` → `tc-label-gen` → `tc-classify --medoid_mode` |
 | GMM soft clusters | C | `tc-gmm` → `tc-label-gen` → `tc-classify --representative_mode` |
@@ -351,16 +454,32 @@ make run-kmedoids-propagate data=massive_scenario run=./runs/<run_dir>
 make run-gmm data=massive_scenario k=100
 make run-gmm-classify data=massive_scenario run=./runs/<run_dir>
 make run-gmm-propagate data=massive_scenario run=./runs/<run_dir>
+
+# ── Hybrid Pipeline (Mode F) ──
+make run-hybrid-full data=massive_scenario
+make run-hybrid-full data=massive_scenario hybrid_p=0.15 hybrid_k_max=40
+make run-hybrid data=massive_scenario step=4     # single step
+
+# ── Baselines (Mode G) ──
+make run-baseline-kmeans data=massive_scenario k=18
+make run-baseline-gmm data=massive_scenario k=18
+make run-baseline-kmeans data=massive_scenario auto_k=1 k_min=5 k_max=30
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `data` | *(required)* | Dataset name |
-| `k` | `100` | K-Medoids / GMM k |
+| `k` | `100` | K-Medoids / GMM / Baseline k |
 | `k0` | `300` | SEALClust overclustering K₀ |
 | `kstar` | `0` | SEALClust manual K\* (`0` = auto) |
 | `kmethod` | `silhouette` | K\* estimation method |
 | `run` | *(for separate stages)* | Run directory path |
+| `hybrid_p` | `0.1` | Hybrid overclustering fraction |
+| `hybrid_k_min` | `2` | Hybrid K sweep minimum |
+| `hybrid_k_max` | `50` | Hybrid K sweep maximum |
+| `hybrid_batch` | `30` | Hybrid LLM batch size |
+| `auto_k` | — | Enable auto-K for baselines (`1`) |
+| `pca` | — | PCA dims for baselines |
 
 ---
 
@@ -435,12 +554,43 @@ make run-gmm-propagate data=massive_scenario run=./runs/<run_dir>
 | `--data NAME` | str | `arxiv_fine` | Dataset name |
 | `--run_dir PATH` | str | **required** | Run dir with `classifications.json` or `classifications_full.json` |
 
+### `tc-hybrid` — Hybrid Pipeline (Mode F)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--data NAME` | str | `massive_scenario` | Dataset name |
+| `--full` | flag | — | Run all 8 steps + evaluation |
+| `--step N` | int | — | Run only step N (1–8) |
+| `--continue_from PATH` | str | — | Resume from existing run dir |
+| `--target_k N` | int | — | Override automatic K (skip step 4) |
+| `--p F` | float | `0.1` | GMM overclustering fraction |
+| `--k_min N` | int | `2` | Min K for silhouette sweep |
+| `--k_max N` | int | `50` | Max K for silhouette sweep |
+| `--llm_batch_size N` | int | `30` | Documents per LLM label-gen call |
+| `--covariance_type M` | str | `full` | GMM covariance: `full`/`tied`/`diag`/`spherical` |
+| `--use_large` | flag | — | Use `large.jsonl` split |
+
+### `tc-baseline` — Baselines (Mode G)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--data NAME` | str | `massive_scenario` | Dataset name |
+| `--method M` | str | **required** | `kmeans` or `gmm` |
+| `--k N` | int | — | Number of clusters (required unless `--auto_k`) |
+| `--auto_k` | flag | — | Automatic K selection (silhouette / BIC) |
+| `--k_min N` | int | `2` | Min K for auto-selection sweep |
+| `--k_max N` | int | `50` | Max K for auto-selection sweep |
+| `--pca_dims N` | int | — | Optional PCA pre-reduction |
+| `--covariance_type M` | str | `full` | GMM covariance: `full`/`tied`/`diag`/`spherical` |
+| `--use_large` | flag | — | Use `large.jsonl` split |
+
 ### Other Commands
 
 | Command | Purpose |
 |---------|---------|
 | `tc-seed-labels` | Generate seed labels for Mode A (run once) |
 | `tc-preflight` | Verify LLM connectivity and configuration |
+| `tc-visualize` | Generate t-SNE visualisation of clustering results |
 
 ---
 
@@ -550,6 +700,12 @@ KMEDOIDS_K=100
 GMM_K=100
 GMM_COVARIANCE_TYPE=tied
 
+# ── Hybrid Pipeline ──
+HYBRID_LLM_BATCH_SIZE=30         # Documents per LLM label-gen call
+HYBRID_P=0.1                     # GMM overclustering fraction (p × N)
+HYBRID_K_MIN=2                   # Min K for silhouette sweep
+HYBRID_K_MAX=50                  # Max K for silhouette sweep
+
 # ── Embedding ──
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 ```
@@ -619,8 +775,12 @@ text-clustering-llm/
 │   ├── kmedoids.py                # K-Medoids clustering + propagation
 │   ├── gmm.py                     # GMM clustering + propagation
 │   ├── sealclust.py               # SEAL-Clust v2 pipeline orchestrator
+│   ├── hybrid.py                  # Hybrid pipeline: 8-step LLM + embedding
+│   ├── baselines.py               # KMeans / GMM baselines (no LLM)
+│   ├── _kmedoids_impl.py          # Custom K-Medoids (PAM alternate)
+│   ├── visualization.py           # t-SNE cluster visualisation
 │   ├── logging_config.py          # Logging setup
-│   └── pipeline/                  # Pipeline steps (label gen, classify, evaluate)
+│   └── pipeline/                  # CLI entry points for all modes
 ├── paper/                         # Backward-compat shims
 ├── tools/
 │   ├── probe_models.py            # 6-test model compatibility probe

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate
+.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate run-hybrid run-hybrid-full run-baseline-kmeans run-baseline-gmm
 
 # ── Environment auto-detection ──────────────────────────────────────────
 # Priority: $(CONDA_PREFIX)/bin/ (if active) → .venv/bin/ → bare (system PATH)
@@ -72,6 +72,27 @@ help:
 	@echo "    make run-sealclust-full data=massive_scenario"
 	@echo "    make run-sealclust-full data=massive_scenario k0=200 kmethod=ensemble"
 	@echo "    make run-sealclust-full data=massive_scenario kstar=18"
+	@echo ""
+	@echo "  ── Hybrid Pipeline (LLM + Embedding) ──"
+	@echo "  run-hybrid data=<d> [step=N]       Single step 1-8 or steps 1-5 (default)"
+	@echo "                                     step=N → run only step N; cont=<dir> → resume"
+	@echo "  run-hybrid-full data=<d>            Full pipeline: steps 1-8 + evaluation"
+	@echo "                                     hybrid_p=0.1 hybrid_k_min=2 hybrid_k_max=50"
+	@echo "                                     target_k=N → override automatic K optimisation"
+	@echo ""
+	@echo "  ── Baselines (no LLM) ──"
+	@echo "  run-baseline-kmeans data=<d> k=<K>  KMeans baseline (auto_k=1 for silhouette sweep)"
+	@echo "  run-baseline-gmm data=<d> k=<K>    GMM baseline   (auto_k=1 for BIC sweep)"
+	@echo "                                     pca=50 → optional PCA pre-reduction"
+	@echo ""
+	@echo "  Example (Hybrid pipeline, full end-to-end):"
+	@echo "    make run-hybrid-full data=massive_scenario"
+	@echo "    make run-hybrid-full data=massive_scenario hybrid_p=0.15 hybrid_k_max=40"
+	@echo "    make run-hybrid data=massive_scenario step=4   # run only step 4"
+	@echo ""
+	@echo "  Example (Baselines):"
+	@echo "    make run-baseline-kmeans data=massive_scenario k=18"
+	@echo "    make run-baseline-gmm data=massive_scenario auto_k=1 k_min=5 k_max=30"
 	@echo ""
 
 setup:
@@ -268,3 +289,78 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
 endif
 	$(BIN)tc-sealclust --data $(data) --run_dir $(run) --propagate
+
+# ── Hybrid Pipeline (Mode F) ────────────────────────────────────────────
+
+# usage: make run-hybrid data=massive_scenario
+#        make run-hybrid data=massive_scenario step=4        (single step)
+#        make run-hybrid data=massive_scenario cont=./runs/<run_dir>  (resume)
+#        make run-hybrid data=massive_scenario p=0.15 k_min=3 k_max=40
+# Default: Steps 1–5 (Label Generation + Embed + Reduce + Optimise K + Align)
+hybrid_p         ?= 0.1
+hybrid_k_min     ?= 2
+hybrid_k_max     ?= 50
+hybrid_batch     ?= 30
+hybrid_cov       ?= full
+run-hybrid:
+ifndef data
+	$(error data is required, e.g. make run-hybrid data=massive_scenario)
+endif
+	mkdir -p logs
+	$(BIN)tc-hybrid --data $(data) \
+		$(if $(step),--step $(step),) \
+		$(if $(cont),--continue_from $(cont),) \
+		--p $(hybrid_p) --k_min $(hybrid_k_min) --k_max $(hybrid_k_max) \
+		--llm_batch_size $(hybrid_batch) --covariance_type $(hybrid_cov) \
+		2>&1 | tee logs/$(data)_hybrid.log
+
+# usage: make run-hybrid-full data=massive_scenario
+#        make run-hybrid-full data=massive_scenario p=0.15 k_min=3 k_max=40
+#        make run-hybrid-full data=massive_scenario target_k=18
+# Runs the entire hybrid pipeline end-to-end: Steps 1-8 + evaluation.
+run-hybrid-full:
+ifndef data
+	$(error data is required, e.g. make run-hybrid-full data=massive_scenario)
+endif
+	mkdir -p logs
+	$(BIN)tc-hybrid --data $(data) --full \
+		--p $(hybrid_p) --k_min $(hybrid_k_min) --k_max $(hybrid_k_max) \
+		--llm_batch_size $(hybrid_batch) --covariance_type $(hybrid_cov) \
+		$(if $(target_k),--target_k $(target_k),) \
+		2>&1 | tee logs/$(data)_hybrid_full.log
+
+# ── Baselines (Mode G) ──────────────────────────────────────────────────
+
+# usage: make run-baseline-kmeans data=massive_scenario k=18
+#        make run-baseline-kmeans data=massive_scenario auto_k=1 k_min=5 k_max=30
+#        make run-baseline-kmeans data=massive_scenario k=18 pca=50
+baseline_k_min   ?= 2
+baseline_k_max   ?= 50
+run-baseline-kmeans:
+ifndef data
+	$(error data is required, e.g. make run-baseline-kmeans data=massive_scenario k=18)
+endif
+	mkdir -p logs
+	$(BIN)tc-baseline --data $(data) --method kmeans \
+		$(if $(k),--k $(k),) \
+		$(if $(auto_k),--auto_k,) \
+		$(if $(pca),--pca_dims $(pca),) \
+		--k_min $(baseline_k_min) --k_max $(baseline_k_max) \
+		2>&1 | tee logs/$(data)_baseline_kmeans.log
+
+# usage: make run-baseline-gmm data=massive_scenario k=18
+#        make run-baseline-gmm data=massive_scenario auto_k=1 k_min=5 k_max=30
+#        make run-baseline-gmm data=massive_scenario k=18 pca=50 cov=diag
+baseline_cov     ?= full
+run-baseline-gmm:
+ifndef data
+	$(error data is required, e.g. make run-baseline-gmm data=massive_scenario k=18)
+endif
+	mkdir -p logs
+	$(BIN)tc-baseline --data $(data) --method gmm \
+		$(if $(k),--k $(k),) \
+		$(if $(auto_k),--auto_k,) \
+		$(if $(pca),--pca_dims $(pca),) \
+		--k_min $(baseline_k_min) --k_max $(baseline_k_max) \
+		--covariance_type $(baseline_cov) \
+		2>&1 | tee logs/$(data)_baseline_gmm.log
