@@ -115,12 +115,14 @@ git push -u origin <type>/<name>
 Or: `make branch name=label-gen-retry type=fix`
 
 2. Fill in the PR template — include the **Experimental results** table if your PR contains a run
-3. Check lint locally: `.venv/bin/ruff check .` (or `make lint`)
+3. Check lint locally: `ruff check .` (or `make lint`)
 4. Merge into `develop` with `--no-ff` to preserve the branch in history
 
 ---
 
 ## Environment Setup
+
+### Option A — uv + venv (recommended for pure-pip workflows)
 
 ```bash
 # 1. Clone
@@ -146,6 +148,35 @@ python openrouter_adapter.py
 ```
 
 Or steps 2–4 in one command: `make setup`
+
+### Option B — Conda
+
+```bash
+# 1. Clone
+git clone https://github.com/AkramChaabnia/text-clustering-llm.git
+cd text-clustering-llm
+
+# 2. Create and activate a conda environment
+conda create -n ppd python=3.12 -y
+conda activate ppd
+
+# 3. Install all dependencies (includes ruff, commitizen, pre-commit)
+pip install -e ".[dev]"
+
+# 4. Install git hooks
+pre-commit install
+
+# 5. Configure env
+cp .env.example .env
+# Edit .env: set OPENAI_API_KEY to your OpenRouter key
+
+# 6. Smoke test
+python openrouter_adapter.py
+```
+
+Or steps 3–4 in one command: `make setup-conda`
+
+> **Note:** The Makefile auto-detects your environment. If a conda environment is active (`$CONDA_PREFIX` set), it uses `$CONDA_PREFIX/bin/`; otherwise it falls back to `.venv/bin/` if present. Run `make help` to see which prefix is detected.
 
 ---
 

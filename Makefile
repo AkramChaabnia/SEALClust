@@ -1,10 +1,23 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate
+.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate
+
+# ── Environment auto-detection ──────────────────────────────────────────
+# Priority: $(CONDA_PREFIX)/bin/ (if active) → .venv/bin/ → bare (system PATH)
+ifdef CONDA_PREFIX
+  BIN := $(CONDA_PREFIX)/bin/
+else ifneq ($(wildcard .venv/bin/),)
+  BIN := .venv/bin/
+else
+  BIN :=
+endif
 
 help:
 	@echo "Usage: make <target>"
 	@echo ""
-	@echo "  setup                              venv + install + git hooks"
+	@echo "  Environment: $(if $(BIN),$(BIN),system PATH)"
+	@echo ""
+	@echo "  setup                              venv + install + git hooks  (uv)"
+	@echo "  setup-conda                        install into active conda env (pip)"
 	@echo "  lint                               ruff check"
 	@echo "  branch name=<n> type=<t>           create and push a branch off develop"
 	@echo "  release                            bump version, merge develop->main, push tags"
@@ -66,8 +79,13 @@ setup:
 	uv pip install -e ".[dev]"
 	.venv/bin/pre-commit install
 
+setup-conda:
+	@[ -n "$(CONDA_PREFIX)" ] || (echo "error: no conda env is active — run 'conda activate <env>' first" && exit 1)
+	pip install -e ".[dev]"
+	$(BIN)pre-commit install
+
 lint:
-	.venv/bin/ruff check .
+	$(BIN)ruff check .
 
 # usage: make branch name=openrouter-retry type=fix
 branch:
@@ -85,7 +103,7 @@ endif
 release:
 	@[ "$$(git branch --show-current)" = "develop" ] || \
 		(echo "error: must be on develop" && exit 1)
-	.venv/bin/cz bump
+	$(BIN)cz bump
 	$(eval NEW_TAG := $(shell git describe --tags --abbrev=0))
 	git checkout main
 	git merge --no-ff develop -m "release: merge develop into main for $(NEW_TAG)"
@@ -95,7 +113,7 @@ release:
 	git push origin --tags
 
 run-step0:
-	.venv/bin/tc-seed-labels
+	$(BIN)tc-seed-labels
 
 # usage: make run-step1 data=massive_scenario
 # Prints the created run_dir — copy it for use in steps 2 and 3.
@@ -104,7 +122,7 @@ ifndef data
 	$(error data is required, e.g. make run-step1 data=massive_scenario)
 endif
 	mkdir -p logs
-	.venv/bin/tc-label-gen --data $(data) 2>&1 | tee logs/$(data)_label_gen.log
+	$(BIN)tc-label-gen --data $(data) 2>&1 | tee logs/$(data)_label_gen.log
 
 # usage: make run-step2 data=massive_scenario run=./runs/massive_scenario_small_20260220_143012
 # Runs in the background; resumes automatically if a checkpoint.json exists in run_dir.
@@ -116,7 +134,7 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260220_143012)
 endif
 	mkdir -p logs
-	nohup .venv/bin/tc-classify --data $(data) --run_dir $(run) \
+	nohup $(BIN)tc-classify --data $(data) --run_dir $(run) \
 		>> logs/$(data)_classification.log 2>&1 &
 	@echo "running in background — tail -f logs/$(data)_classification.log"
 	@echo "to resume after interruption, re-run the same command"
@@ -129,7 +147,7 @@ endif
 ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260220_143012)
 endif
-	.venv/bin/tc-evaluate --data $(data) --run_dir $(run)
+	$(BIN)tc-evaluate --data $(data) --run_dir $(run)
 
 # ── K-Medoids accelerated pipeline ──────────────────────────────────────
 
@@ -141,7 +159,7 @@ ifndef data
 	$(error data is required, e.g. make run-kmedoids data=massive_scenario k=100)
 endif
 	mkdir -p logs
-	.venv/bin/tc-kmedoids --data $(data) --kmedoids_k $(k) 2>&1 | tee logs/$(data)_kmedoids.log
+	$(BIN)tc-kmedoids --data $(data) --kmedoids_k $(k) 2>&1 | tee logs/$(data)_kmedoids.log
 
 # usage: make run-kmedoids-classify data=massive_scenario run=./runs/<run_dir>
 # Classifies only the medoid documents (uses --medoid_mode).
@@ -153,7 +171,7 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260220_143012)
 endif
 	mkdir -p logs
-	nohup .venv/bin/tc-classify --data $(data) --run_dir $(run) --medoid_mode \
+	nohup $(BIN)tc-classify --data $(data) --run_dir $(run) --medoid_mode \
 		>> logs/$(data)_kmedoids_classification.log 2>&1 &
 	@echo "running in background — tail -f logs/$(data)_kmedoids_classification.log"
 
@@ -166,7 +184,7 @@ endif
 ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260220_143012)
 endif
-	.venv/bin/tc-kmedoids --data $(data) --run_dir $(run) --propagate
+	$(BIN)tc-kmedoids --data $(data) --run_dir $(run) --propagate
 
 # ── GMM accelerated pipeline ────────────────────────────────────────────
 
@@ -176,7 +194,7 @@ ifndef data
 	$(error data is required, e.g. make run-gmm data=massive_scenario k=100)
 endif
 	mkdir -p logs
-	.venv/bin/tc-gmm --data $(data) --gmm_k $(k) 2>&1 | tee logs/$(data)_gmm.log
+	$(BIN)tc-gmm --data $(data) --gmm_k $(k) 2>&1 | tee logs/$(data)_gmm.log
 
 # usage: make run-gmm-classify data=massive_scenario run=./runs/<run_dir>
 run-gmm-classify:
@@ -187,7 +205,7 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
 endif
 	mkdir -p logs
-	nohup .venv/bin/tc-classify --data $(data) --run_dir $(run) --representative_mode \
+	nohup $(BIN)tc-classify --data $(data) --run_dir $(run) --representative_mode \
 		>> logs/$(data)_gmm_classification.log 2>&1 &
 	@echo "running in background — tail -f logs/$(data)_gmm_classification.log"
 
@@ -199,7 +217,7 @@ endif
 ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
 endif
-	.venv/bin/tc-gmm --data $(data) --run_dir $(run) --propagate
+	$(BIN)tc-gmm --data $(data) --run_dir $(run) --propagate
 
 # ── SEAL-Clust full framework ───────────────────────────────────────────
 
@@ -216,7 +234,7 @@ ifndef data
 	$(error data is required, e.g. make run-sealclust data=massive_scenario)
 endif
 	mkdir -p logs
-	.venv/bin/tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) 2>&1 | tee logs/$(data)_sealclust.log
+	$(BIN)tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) 2>&1 | tee logs/$(data)_sealclust.log
 
 # usage: make run-sealclust-full data=massive_scenario k0=300
 #        make run-sealclust-full data=massive_scenario k0=300 kstar=18
@@ -226,7 +244,7 @@ ifndef data
 	$(error data is required, e.g. make run-sealclust-full data=massive_scenario)
 endif
 	mkdir -p logs
-	.venv/bin/tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) --full 2>&1 | tee logs/$(data)_sealclust_full.log
+	$(BIN)tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) --full 2>&1 | tee logs/$(data)_sealclust_full.log
 
 # usage: make run-sealclust-classify data=massive_scenario run=./runs/<run_dir>
 run-sealclust-classify:
@@ -237,7 +255,7 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
 endif
 	mkdir -p logs
-	nohup .venv/bin/tc-classify --data $(data) --run_dir $(run) --medoid_mode \
+	nohup $(BIN)tc-classify --data $(data) --run_dir $(run) --medoid_mode \
 		>> logs/$(data)_sealclust_classification.log 2>&1 &
 	@echo "running in background — tail -f logs/$(data)_sealclust_classification.log"
 
@@ -249,4 +267,4 @@ endif
 ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260313_...)
 endif
-	.venv/bin/tc-sealclust --data $(data) --run_dir $(run) --propagate
+	$(BIN)tc-sealclust --data $(data) --run_dir $(run) --propagate
