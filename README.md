@@ -178,13 +178,13 @@ Single `--full` command runs all 9 stages + evaluation.
 
 ```bash
 # Auto K* (algorithm estimates the number of clusters)
-conda run -n ppd tc-sealclust --data massive_scenario --k0 300 --full
+tc-sealclust --data massive_scenario --k0 300 --full
 
 # Manual K* (you know the ground-truth K)
-conda run -n ppd tc-sealclust --data massive_scenario --k0 300 --k_star 18 --full
+tc-sealclust --data massive_scenario --k0 300 --k_star 18 --full
 
 # Try different K* estimation methods
-conda run -n ppd tc-sealclust --data massive_scenario --k0 300 --k_method ensemble --full
+tc-sealclust --data massive_scenario --k0 300 --k_method ensemble --full
 ```
 
 **Cost**: ~310 LLM calls · **Time**: ~10 min · **Expected ACC**: ~56% (K\*=18, PCA 50D)
