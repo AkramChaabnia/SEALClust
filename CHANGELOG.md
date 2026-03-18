@@ -1,3 +1,12 @@
+## v1.5.0 (2026-03-18)
+
+### Feat
+
+- **visualization**: add post-run visualization module with confusion matrix, PCA/t-SNE/UMAP scatter plots, side-by-side cluster comparison, and cluster distribution charts
+- **visualization**: auto-trigger visualizations after evaluation and full SEAL-Clust pipeline runs
+- **visualization**: add `tc-visualize` CLI entry point for standalone use on existing runs
+- **build**: add `matplotlib` and `umap-learn` as project dependencies
+
 ## v1.4.0 (2026-03-15)
 
 ### Feat
