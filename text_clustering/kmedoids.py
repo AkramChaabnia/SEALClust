@@ -63,7 +63,7 @@ def run_kmedoids(
     medoid_indices : np.ndarray
         Shape ``(k,)`` — indices into the original document list that are medoids.
     """
-    from sklearn_extra.cluster import KMedoids
+    from text_clustering._kmedoids_impl import KMedoids
 
     # Clamp k to the number of samples (avoids crash on tiny datasets)
     n_samples = embeddings.shape[0]
