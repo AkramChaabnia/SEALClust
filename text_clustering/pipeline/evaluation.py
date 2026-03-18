@@ -167,6 +167,18 @@ def main(args):
         json.dump(results, f, indent=2)
     logger.info("Saved results to %s", results_path)
 
+    # ── Auto-generate visualizations ──
+    try:
+        from text_clustering.visualization import generate_all_visualizations
+        generate_all_visualizations(
+            run_dir=args.run_dir,
+            data_path=args.data_path,
+            data_name=args.data,
+            use_large=args.use_large,
+        )
+    except Exception as exc:
+        logger.warning("Visualization failed (non-fatal): %s", exc)
+
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Step 3: Evaluate clustering metrics.")

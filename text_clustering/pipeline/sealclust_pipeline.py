@@ -511,6 +511,22 @@ def run_full_pipeline(args) -> None:
         eval_args.use_large = True
     eval_main(eval_args)
 
+    # ── Visualization ──
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("SEALClust — Visualization")
+    logger.info("=" * 70)
+    try:
+        from text_clustering.visualization import generate_all_visualizations
+        generate_all_visualizations(
+            run_dir=run_dir,
+            data_path=args.data_path,
+            data_name=args.data,
+            use_large=args.use_large,
+        )
+    except Exception as exc:
+        logger.warning("Visualization failed (non-fatal): %s", exc)
+
     # ── Summary ──
     results_path = os.path.join(run_dir, "results.json")
     if os.path.exists(results_path):

@@ -28,6 +28,8 @@ dependencies = [
   "numpy>=1.26.0",
   "tqdm>=4.66.0",
   "python-dotenv>=1.0.0",
+  "matplotlib>=3.8.0",
+  "umap-learn>=0.5.0",
 ]
 
 [project.scripts]
@@ -39,6 +41,7 @@ tc-preflight      = "tools.preflight:main"
 tc-kmedoids       = "text_clustering.pipeline.kmedoids_preprocessing:main_cli"
 tc-gmm            = "text_clustering.pipeline.gmm_preprocessing:main_cli"
 tc-sealclust      = "text_clustering.pipeline.sealclust_pipeline:main_cli"
+tc-visualize      = "text_clustering.visualization:main_cli"
 
 [project.optional-dependencies]
 dev = [
