@@ -187,7 +187,8 @@ def estimate_k_star_silhouette(
     """
     from sklearn.metrics import silhouette_score
     from sklearn.preprocessing import normalize
-    from sklearn_extra.cluster import KMedoids
+
+    from text_clustering._kmedoids_impl import KMedoids
 
     n_reps = representative_embeddings.shape[0]
     k_max = min(k_max, n_reps - 1)
@@ -281,7 +282,8 @@ def estimate_k_star_calinski(
     """
     from sklearn.metrics import calinski_harabasz_score
     from sklearn.preprocessing import normalize
-    from sklearn_extra.cluster import KMedoids
+
+    from text_clustering._kmedoids_impl import KMedoids
 
     n_reps = representative_embeddings.shape[0]
     k_max = min(k_max, n_reps - 1)
@@ -683,7 +685,7 @@ def elbow_select_k(
     inertias : dict[int, float]
         ``{k: inertia}`` for every k tried.
     """
-    from sklearn_extra.cluster import KMedoids
+    from text_clustering._kmedoids_impl import KMedoids
 
     k_min, k_max = k_range
     n_samples = embeddings.shape[0]
