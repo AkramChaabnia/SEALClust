@@ -1,3 +1,11 @@
+## v1.5.1 (2026-03-18)
+
+### Fix
+
+- **makefile**: support both conda and venv environments #4
+- **lint**: resolve all 32 ruff errors across codebase
+- **makefile**: support both conda and venv environments
+
 ## v1.5.0 (2026-03-18)
 
 ### Feat
