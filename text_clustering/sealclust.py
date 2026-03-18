@@ -114,7 +114,10 @@ def estimate_k_star_bic(
         "Stage 6: Estimating K* via GMM+BIC on %d representative embeddings (dim=%d)",
         n_reps, emb_norm.shape[1],
     )
-    logger.info("  Candidate range: K ∈ [%d, %d], covariance_type=%s", k_min, k_max, covariance_type)
+    logger.info(
+        "  Candidate range: K ∈ [%d, %d], covariance_type=%s",
+        k_min, k_max, covariance_type,
+    )
 
     bic_scores: dict[int, float] = {}
     for k in range(k_min, k_max + 1):
@@ -182,9 +185,9 @@ def estimate_k_star_silhouette(
     silhouette_scores : dict[int, float]
         ``{k: score}`` for every K tried.
     """
-    from sklearn_extra.cluster import KMedoids
     from sklearn.metrics import silhouette_score
     from sklearn.preprocessing import normalize
+    from sklearn_extra.cluster import KMedoids
 
     n_reps = representative_embeddings.shape[0]
     k_max = min(k_max, n_reps - 1)
@@ -276,9 +279,9 @@ def estimate_k_star_calinski(
     ch_scores : dict[int, float]
         ``{k: ch_score}`` for every K tried.
     """
-    from sklearn_extra.cluster import KMedoids
     from sklearn.metrics import calinski_harabasz_score
     from sklearn.preprocessing import normalize
+    from sklearn_extra.cluster import KMedoids
 
     n_reps = representative_embeddings.shape[0]
     k_max = min(k_max, n_reps - 1)
@@ -464,7 +467,10 @@ def discover_labels(
         try:
             parsed = eval(raw)  # noqa: S307
         except Exception:
-            logger.warning("  Chunk %d: could not parse LLM response — skipping", i // chunk_size + 1)
+            logger.warning(
+                "  Chunk %d: could not parse LLM response — skipping",
+                i // chunk_size + 1,
+            )
             continue
 
         # Handle both {"labels": [...]} and flat list [...]
@@ -479,7 +485,10 @@ def discover_labels(
                 if isinstance(label, str) and label not in all_labels:
                     all_labels.append(label)
 
-        logger.info("  Chunk %d/%d — labels so far: %d", i // chunk_size + 1, n_chunks, len(all_labels))
+        logger.info(
+            "  Chunk %d/%d — labels so far: %d",
+            i // chunk_size + 1, n_chunks, len(all_labels),
+        )
 
     logger.info("Stage 5: Discovered %d unique candidate labels", len(all_labels))
     return all_labels
@@ -550,7 +559,10 @@ def consolidate_labels(
 
     # If the LLM didn't produce exactly K*, try a second pass
     if len(final_labels) != k_star and abs(len(final_labels) - k_star) > 2:
-        logger.info("Stage 7: Second consolidation pass (got %d, want %d)", len(final_labels), k_star)
+        logger.info(
+            "Stage 7: Second consolidation pass (got %d, want %d)",
+            len(final_labels), k_star,
+        )
         prompt2 = prompt_consolidate_labels(final_labels, k_star)
         raw2 = chat(prompt2, client, max_tokens=4096)
         if raw2:

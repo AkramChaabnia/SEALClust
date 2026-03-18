@@ -81,7 +81,10 @@ MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 if __name__ == "__main__":
     base_url = os.getenv("OPENAI_BASE_URL", "(openai default)")
     provider_env = os.getenv("LLM_PROVIDER", "")
-    detected = provider_env if provider_env else ("openrouter" if "openrouter" in str(base_url) else "openai")
+    detected = (
+        provider_env if provider_env
+        else ("openrouter" if "openrouter" in str(base_url) else "openai")
+    )
     print(f"Provider  : {detected}")
     print(f"Base URL  : {base_url}")
     print(f"Model     : {MODEL}")
