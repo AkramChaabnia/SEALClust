@@ -488,7 +488,10 @@ def discover_labels(
         if ckpt is not None:
             start_chunk = ckpt["processed_chunks"]
             all_labels = ckpt["all_labels"]
-            logger.info("[checkpoint] Resuming label discovery from chunk %d/%d (%d labels)", start_chunk + 1, n_chunks, len(all_labels))
+            logger.info(
+                "[checkpoint] Resuming label discovery from chunk %d/%d (%d labels)",
+                start_chunk + 1, n_chunks, len(all_labels),
+            )
 
     ckpt_interval = max(3, n_chunks // 10)  # save every ~10%, at least every 3 chunks
 
@@ -540,7 +543,10 @@ def discover_labels(
                 "processed_chunks": chunk_num + 1,
                 "all_labels": all_labels,
             })
-            logger.info("[checkpoint] Saved label discovery: %d/%d chunks, %d labels", chunk_num + 1, n_chunks, len(all_labels))
+            logger.info(
+                "[checkpoint] Saved label discovery: %d/%d chunks, %d labels",
+                chunk_num + 1, n_chunks, len(all_labels),
+            )
 
     logger.info("Stage 5: Discovered %d unique candidate labels", len(all_labels))
 

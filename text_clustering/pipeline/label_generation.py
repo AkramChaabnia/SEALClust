@@ -234,7 +234,7 @@ def main(args):
 
     # ── Label reuse: try loading from shared cache ──
     if reuse_labels:
-        from text_clustering.label_cache import load_labels, list_cached
+        from text_clustering.label_cache import list_cached, load_labels
 
         cached = load_labels(label_cache_dir, args.data, size, n_labels=forced_k)
         if cached is not None:

@@ -253,7 +253,10 @@ def run_pipeline(args) -> str:
     # Stage 6 (auto).  For manual K* we can short-circuit Stages 5-7 entirely.
     # For auto K* we must still run Stage 6, then check cache for that K*.
     reuse_labels = getattr(args, "reuse_labels", False)
-    label_cache_dir = getattr(args, "label_cache_dir", None) or os.path.join(args.runs_dir, "label_cache")
+    label_cache_dir = (
+        getattr(args, "label_cache_dir", None)
+        or os.path.join(args.runs_dir, "label_cache")
+    )
 
     # Resolve K* before touching labels (manual = skip Stage 6)
     if args.k_star:
@@ -295,7 +298,8 @@ def run_pipeline(args) -> str:
     # ── Label reuse: try loading from shared cache ──
     _labels_from_cache = False
     if reuse_labels:
-        from text_clustering.label_cache import load_labels as _lc_load, list_cached as _lc_list
+        from text_clustering.label_cache import list_cached as _lc_list
+        from text_clustering.label_cache import load_labels as _lc_load
 
         cached = _lc_load(label_cache_dir, args.data, size, n_labels=k_star)
         if cached is not None:
@@ -315,7 +319,10 @@ def run_pipeline(args) -> str:
                     k_star, available,
                 )
             else:
-                logger.info("[label-reuse] No cached labels for %s_%s — generating labels", args.data, size)
+                logger.info(
+                    "[label-reuse] No cached labels for %s_%s — generating labels",
+                    args.data, size,
+                )
 
     if not _labels_from_cache:
         # ── Stage 5 (original): Label Discovery ──

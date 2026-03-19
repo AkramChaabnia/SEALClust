@@ -132,7 +132,10 @@ def step1_generate_labels(
         if ckpt is not None:
             start_batch = ckpt["processed_batches"]
             per_doc_labels = ckpt["per_doc_labels"]
-            logger.info("[checkpoint] Resuming hybrid step 1 from batch %d/%d", start_batch + 1, n_batches)
+            logger.info(
+                "[checkpoint] Resuming hybrid step 1 from batch %d/%d",
+                start_batch + 1, n_batches,
+            )
 
     ckpt_interval = max(5, n_batches // 20)  # save every ~5%
 
@@ -193,7 +196,10 @@ def step1_generate_labels(
                 "processed_batches": batch_num + 1,
                 "per_doc_labels": per_doc_labels,
             })
-            logger.info("[checkpoint] Saved hybrid step 1 progress: %d/%d batches", batch_num + 1, n_batches)
+            logger.info(
+                "[checkpoint] Saved hybrid step 1 progress: %d/%d batches",
+                batch_num + 1, n_batches,
+            )
 
     # Collect unique labels
     unique_labels = list(dict.fromkeys(
@@ -631,7 +637,10 @@ def step7_label_medoids(
         if ckpt is not None:
             medoid_labels = {int(k): v for k, v in ckpt["medoid_labels"].items()}
             start_idx = ckpt["processed"]
-            logger.info("[checkpoint] Resuming hybrid step 7 from medoid %d/%d", start_idx, len(medoid_docs))
+            logger.info(
+                "[checkpoint] Resuming hybrid step 7 from medoid %d/%d",
+                start_idx, len(medoid_docs),
+            )
 
     total = len(medoid_docs)
     ckpt_interval = max(10, total // 20)  # save every ~5%, at least every 10

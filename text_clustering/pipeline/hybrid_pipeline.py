@@ -216,7 +216,8 @@ def run_steps_1_to_5(args) -> str:
     # ── Label reuse: try loading from shared cache ──
     _labels_from_cache = False
     if reuse_labels:
-        from text_clustering.label_cache import load_labels as _lc_load, list_cached as _lc_list
+        from text_clustering.label_cache import list_cached as _lc_list
+        from text_clustering.label_cache import load_labels as _lc_load
 
         cached = _lc_load(label_cache_dir, args.data, size, n_labels=target_k)
         if cached is not None:
