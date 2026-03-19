@@ -137,10 +137,10 @@ coverage, then uses the LLM to discover the right number of meaningful categorie
 | 1 | `embeddings.npy` | Skip embedding |
 | 2 | `embeddings_reduced.npy` | Skip PCA/t-SNE |
 | 3 | `sealclust_metadata.json` | Skip overclustering |
-| 5 | `labels_proposed.json` | Skip label discovery |
+| 5 | `labels_proposed.json` | Skip label discovery (has intra-stage checkpoint) |
 | 6 | `k_estimation.json` | Skip K\* estimation |
 | 7 | `labels_merged.json` | Skip label consolidation |
-| 8 | `classifications.json` | Has its own checkpoint system |
+| 8 | `classifications.json` | Has intra-stage checkpoint (`checkpoint_classify.json`) |
 | 9 | `classifications_full.json` | Skip propagation |
 
 ---
@@ -671,17 +671,73 @@ make run-graphclust data=massive_scenario
 
 ## 7. Resuming an Interrupted Run
 
-The pipeline caches every stage's output. If interrupted, pass the same `--run_dir`:
+Every pipeline supports **two layers** of fault tolerance:
+
+1. **Stage-level caching** — Each stage writes its output to a file (e.g. `embeddings.npy`, `labels_proposed.json`). If the file already exists when the pipeline is re-run with the same `--run_dir`, the stage is skipped entirely. This is automatic and requires no special flags.
+
+2. **Intra-stage checkpointing** — Long-running LLM loops (label generation, classification, medoid labelling) save progress to a `checkpoint_*.json` file at regular intervals. If interrupted, the same command resumes from the last checkpoint. Checkpoint files are automatically deleted once the stage completes successfully.
+
+### 7.1 Quick Resume (All Pipelines)
+
+Pass the same `--run_dir` to continue from where it stopped:
 
 ```bash
-# Stages 1-7 are cached, continues from where it stopped
+# SEAL-Clust: stages 1-7 cached, continues from the first incomplete stage
 tc-sealclust --data massive_scenario --k0 300 --k_star 18 \
     --run_dir ./runs/massive_scenario_small_20260314_150000 --full
+
+# Hybrid: same pattern
+tc-hybrid --data massive_scenario --target_k 18 \
+    --run_dir ./runs/<run_dir> --full
+
+# Graph clustering: same pattern
+tc-graphclust --data massive_scenario --target_k 18 \
+    --run_dir ./runs/<run_dir> --full
+
+# Original 3-step: re-run Step 2 (it resumes from checkpoint)
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
 ```
 
-### Special Cases
+### 7.2 Checkpoint Files Reference
 
-**Stage 8 checkpoint resumption**: `--full` re-runs Stage 8 from scratch. For checkpoint-based resumption (saves every 200 docs), run `tc-classify` separately:
+| Pipeline | Stage | Checkpoint File | What Is Saved | Save Interval |
+|----------|-------|-----------------|---------------|:-------------:|
+| **Original** (Step 1) | Label Generation | `checkpoint_labelgen.json` | Processed chunk count + all labels discovered so far | Every ~5% of chunks |
+| **Original** (Step 2) | Classification | `checkpoint_classify.json` | Processed sample count + classification dict | Every 200 samples (unbatched) or every ~10 batches (batched) |
+| **Hybrid** (Step 1) | LLM Label Gen | `checkpoint_hybrid_step1.json` | Processed batch count + per-document labels | Every ~5% of batches |
+| **Hybrid** (Step 7) | Medoid Labelling | `checkpoint_hybrid_step7.json` | Processed count + medoid label assignments | Every ~5% of medoids |
+| **SEAL-Clust** (Stage 5) | Label Discovery | `checkpoint_sealclust_labels.json` | Processed chunk count + candidate labels | Every ~10% of chunks |
+| **Graph Clust** (Step 3) | Community Labelling | `checkpoint_graphclust_step3.json` | Labelled community IDs + names | Every ~10% of communities |
+
+> **Note**: Checkpoint files are ephemeral — they exist only during an active run. Once the stage finishes, the checkpoint is deleted automatically.
+
+### 7.3 How Checkpoints Work
+
+When a pipeline stage is interrupted (Ctrl+C, timeout, crash):
+
+```
+runs/massive_scenario_small_20260314_150000/
+├── checkpoint_classify.json          ← checkpoint exists → stage was interrupted
+├── classifications.json              ← partial results (also written at each checkpoint)
+├── labels_merged.json                ← completed by previous stage
+└── ...
+```
+
+Simply re-run the **exact same command**. The pipeline will:
+1. Skip all stages whose output files already exist (stage-level cache)
+2. Within the interrupted stage, load the checkpoint and skip already-processed items
+3. Continue from where it left off
+4. Delete the checkpoint file when the stage finishes
+
+```bash
+# Example: classification was interrupted at sample 1500/2974
+# Just re-run — it resumes from sample 1500
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
+```
+
+### 7.4 Special Cases
+
+**SEAL-Clust `--full` and Stage 8**: The `--full` flag chains all stages. If Stage 8 (classification) was interrupted, re-running with `--full` will skip Stages 1–7 (cached) and resume Stage 8 from its checkpoint. You can also run Stage 8 separately for finer control:
 
 ```bash
 tc-classify --data massive_scenario \
@@ -691,12 +747,21 @@ tc-classify --data massive_scenario \
 **Re-run with different K\***: Delete K\*-dependent files and re-run:
 
 ```bash
-rm ./runs/<run_dir>/labels_merged.json classifications.json classifications_full.json results.json
+rm ./runs/<run_dir>/labels_merged.json ./runs/<run_dir>/classifications.json \
+   ./runs/<run_dir>/classifications_full.json ./runs/<run_dir>/results.json
 tc-sealclust --data massive_scenario --k0 300 --k_star 25 \
     --run_dir ./runs/<run_dir> --full
 ```
 
 > **💡** Keep `labels_proposed.json` — candidate labels don't depend on K\*.
+
+**Original Step 1 (label generation)**: Uses a fixed random seed (`42`) for shuffling, so checkpoint resume sees the same document order. If you need a different shuffle, delete the checkpoint before re-running.
+
+### 7.5 Limitations
+
+- **Baselines** (`tc-baseline`): KMeans and GMM baselines are fully deterministic and fast (no LLM calls), so checkpointing is not needed. If interrupted, simply re-run — embedding computation is cached.
+- **Evaluation** (`tc-evaluate`): Pure computation on existing files, finishes in seconds. No checkpoint needed.
+- **Cross-stage dependencies**: Deleting a stage's output and re-running will not automatically invalidate downstream stages. If you re-run Stage 5 (labels), you must also delete Stage 7+ outputs.
 
 ---
 

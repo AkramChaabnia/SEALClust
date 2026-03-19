@@ -224,6 +224,7 @@ def run_pipeline(args, label_only: bool = False) -> str:
             community_labels, texts, client,
             samples_per_community=args.samples_per_community,
             random_state=args.seed,
+            run_dir=run_dir,
         )
         _write_json(labels_path, {str(k): v for k, v in community_names.items()})
 
@@ -367,6 +368,7 @@ def run_single_step(args) -> None:
             community_labels, texts, client,
             samples_per_community=args.samples_per_community,
             random_state=args.seed,
+            run_dir=run_dir,
         )
         _write_json(os.path.join(run_dir, "graphclust_community_names.json"), {
             str(k): v for k, v in community_names.items()

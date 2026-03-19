@@ -256,6 +256,7 @@ def run_pipeline(args) -> str:
         representative_texts = [doc["input"] for doc in prototype_docs]
         candidate_labels = discover_labels(
             representative_texts, client, chunk_size=args.label_chunk_size,
+            run_dir=run_dir,
         )
         _write_json(labels_proposed_path, candidate_labels)
 

@@ -57,7 +57,7 @@ from text_clustering.prompts import (
 
 logger = logging.getLogger(__name__)
 
-CHECKPOINT_FILE = "checkpoint.json"
+CHECKPOINT_FILE = "checkpoint_classify.json"
 CLASSIFICATIONS_FILE = "classifications.json"
 
 
@@ -89,6 +89,10 @@ def get_merged_labels(run_dir: str) -> list[str]:
 def load_checkpoint(run_dir: str) -> tuple[int, dict] | tuple[None, None]:
     """Return (processed_count, answer_dict) from checkpoint, or (None, None) if none exists."""
     path = os.path.join(run_dir, CHECKPOINT_FILE)
+    # Backward compatibility: also check the old name
+    legacy_path = os.path.join(run_dir, "checkpoint.json")
+    if not os.path.exists(path) and os.path.exists(legacy_path):
+        path = legacy_path
     if not os.path.exists(path):
         return None, None
     with open(path, "r") as f:

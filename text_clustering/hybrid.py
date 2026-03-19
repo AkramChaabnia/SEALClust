@@ -52,7 +52,9 @@ step8_propagate_labels(medoid_labels, gmm_labels, n_documents)
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from collections import Counter
 
 import numpy as np
@@ -64,6 +66,28 @@ from sklearn.preprocessing import normalize
 logger = logging.getLogger(__name__)
 
 
+# ── Checkpoint helpers ────────────────────────────────────────────────────
+
+def _save_hybrid_checkpoint(path: str, data: dict) -> None:
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _load_hybrid_checkpoint(path: str) -> dict | None:
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _remove_hybrid_checkpoint(path: str) -> None:
+    if os.path.exists(path):
+        os.remove(path)
+
+
 # ---------------------------------------------------------------------------
 # Step 1: Initial LLM Label Generation (K0)
 # ---------------------------------------------------------------------------
@@ -72,6 +96,7 @@ def step1_generate_labels(
     texts: list[str],
     client,
     batch_size: int = 30,
+    run_dir: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """Generate one-word labels for all documents via LLM.
 
@@ -83,6 +108,8 @@ def step1_generate_labels(
         OpenAI-compatible client.
     batch_size : int
         Number of documents per LLM call.
+    run_dir : str | None
+        If provided, save/load checkpoints to this directory.
 
     Returns
     -------
@@ -97,13 +124,28 @@ def step1_generate_labels(
     per_doc_labels: list[str] = ["Unlabelled"] * len(texts)
     n_batches = (len(texts) + batch_size - 1) // batch_size
 
+    # ── Checkpoint resume ──
+    start_batch = 0
+    ckpt_path = os.path.join(run_dir, "checkpoint_hybrid_step1.json") if run_dir else None
+    if ckpt_path:
+        ckpt = _load_hybrid_checkpoint(ckpt_path)
+        if ckpt is not None:
+            start_batch = ckpt["processed_batches"]
+            per_doc_labels = ckpt["per_doc_labels"]
+            logger.info("[checkpoint] Resuming hybrid step 1 from batch %d/%d", start_batch + 1, n_batches)
+
+    ckpt_interval = max(5, n_batches // 20)  # save every ~5%
+
     logger.info(
         "Step 1: Generating labels for %d documents in %d batches "
         "(batch_size=%d)",
         len(texts), n_batches, batch_size,
     )
 
-    for batch_idx in range(0, len(texts), batch_size):
+    for batch_num, batch_idx in enumerate(range(0, len(texts), batch_size)):
+        if batch_num < start_batch:
+            continue
+
         batch = texts[batch_idx: batch_idx + batch_size]
         prompt = prompt_hybrid_generate_labels(batch)
         raw = chat(prompt, client, max_tokens=4096)
@@ -111,7 +153,7 @@ def step1_generate_labels(
         if raw is None:
             logger.warning(
                 "  Batch %d: LLM returned None — skipping",
-                batch_idx // batch_size + 1,
+                batch_num + 1,
             )
             continue
 
@@ -120,7 +162,7 @@ def step1_generate_labels(
         except Exception:
             logger.warning(
                 "  Batch %d: could not parse response — skipping",
-                batch_idx // batch_size + 1,
+                batch_num + 1,
             )
             continue
 
@@ -142,8 +184,16 @@ def step1_generate_labels(
 
         logger.info(
             "  Batch %d/%d — assigned %d labels",
-            batch_idx // batch_size + 1, n_batches, len(labels_list),
+            batch_num + 1, n_batches, len(labels_list),
         )
+
+        # ── Checkpoint save ──
+        if ckpt_path and (batch_num + 1) % ckpt_interval == 0:
+            _save_hybrid_checkpoint(ckpt_path, {
+                "processed_batches": batch_num + 1,
+                "per_doc_labels": per_doc_labels,
+            })
+            logger.info("[checkpoint] Saved hybrid step 1 progress: %d/%d batches", batch_num + 1, n_batches)
 
     # Collect unique labels
     unique_labels = list(dict.fromkeys(
@@ -157,6 +207,11 @@ def step1_generate_labels(
         len(texts),
         per_doc_labels.count("Unlabelled"),
     )
+
+    # Clean up checkpoint on successful completion
+    if ckpt_path:
+        _remove_hybrid_checkpoint(ckpt_path)
+
     return per_doc_labels, unique_labels
 
 
@@ -536,6 +591,7 @@ def step7_label_medoids(
     medoid_indices: np.ndarray,
     final_labels: list[str],
     client,
+    run_dir: str | None = None,
 ) -> dict[int, str]:
     """Assign a label to each medoid document via LLM.
 
@@ -549,6 +605,8 @@ def step7_label_medoids(
         The final label set from Step 5.
     client
         OpenAI-compatible client.
+    run_dir : str | None
+        If provided, save/load checkpoints to this directory.
 
     Returns
     -------
@@ -565,7 +623,24 @@ def step7_label_medoids(
 
     medoid_labels: dict[int, str] = {}
 
-    for doc, med_idx in zip(medoid_docs, sorted(medoid_indices)):
+    # ── Checkpoint resume ──
+    ckpt_path = os.path.join(run_dir, "checkpoint_hybrid_step7.json") if run_dir else None
+    start_idx = 0
+    if ckpt_path:
+        ckpt = _load_hybrid_checkpoint(ckpt_path)
+        if ckpt is not None:
+            medoid_labels = {int(k): v for k, v in ckpt["medoid_labels"].items()}
+            start_idx = ckpt["processed"]
+            logger.info("[checkpoint] Resuming hybrid step 7 from medoid %d/%d", start_idx, len(medoid_docs))
+
+    total = len(medoid_docs)
+    ckpt_interval = max(10, total // 20)  # save every ~5%, at least every 10
+
+    sorted_indices = sorted(medoid_indices)
+    for idx, (doc, med_idx) in enumerate(zip(medoid_docs, sorted_indices)):
+        if idx < start_idx:
+            continue
+
         text = doc["input"]
         prompt = prompt_hybrid_classify_medoid(final_labels, text)
         raw = chat(prompt, client)
@@ -607,6 +682,14 @@ def step7_label_medoids(
 
         medoid_labels[int(med_idx)] = assigned
 
+        # ── Checkpoint save ──
+        if ckpt_path and (idx + 1) % ckpt_interval == 0:
+            _save_hybrid_checkpoint(ckpt_path, {
+                "processed": idx + 1,
+                "medoid_labels": {str(k): v for k, v in medoid_labels.items()},
+            })
+            logger.info("[checkpoint] Saved hybrid step 7 progress: %d/%d medoids", idx + 1, total)
+
     n_success = sum(1 for v in medoid_labels.values() if v != "Unsuccessful")
     logger.info(
         "Step 7: Labelled %d/%d medoids successfully",
@@ -617,6 +700,10 @@ def step7_label_medoids(
     label_counts = Counter(medoid_labels.values())
     for label, count in sorted(label_counts.items(), key=lambda x: -x[1]):
         logger.info("  %-40s %d medoids", label, count)
+
+    # Clean up checkpoint on successful completion
+    if ckpt_path:
+        _remove_hybrid_checkpoint(ckpt_path)
 
     return medoid_labels
 

@@ -146,6 +146,7 @@ def run_steps_1_to_5(args) -> str:
 
         per_doc_labels, unique_labels_k0 = step1_generate_labels(
             texts, client, batch_size=args.llm_batch_size,
+            run_dir=run_dir,
         )
         _write_json(labels_k0_path, unique_labels_k0)
         _write_json(per_doc_path, per_doc_labels)
@@ -339,6 +340,7 @@ def run_steps_6_to_8(args, run_dir: str) -> None:
 
         medoid_labels = step7_label_medoids(
             medoid_docs, medoid_indices, final_labels, client,
+            run_dir=run_dir,
         )
         _write_json(medoid_labels_path, {
             str(k): v for k, v in medoid_labels.items()
@@ -460,6 +462,7 @@ def run_single_step(args) -> None:
         client = ini_client()
         per_doc_labels, unique_labels_k0 = step1_generate_labels(
             texts, client, batch_size=args.llm_batch_size,
+            run_dir=run_dir,
         )
         _write_json(os.path.join(run_dir, "hybrid_labels_k0.json"), unique_labels_k0)
         _write_json(os.path.join(run_dir, "hybrid_per_doc_labels.json"), per_doc_labels)
@@ -552,6 +555,7 @@ def run_single_step(args) -> None:
         client = ini_client()
         medoid_labels = step7_label_medoids(
             medoid_docs, medoid_indices, final_labels, client,
+            run_dir=run_dir,
         )
         _write_json(os.path.join(run_dir, "hybrid_medoid_labels.json"), {
             str(k): v for k, v in medoid_labels.items()

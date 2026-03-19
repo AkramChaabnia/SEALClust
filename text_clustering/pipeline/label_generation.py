@@ -46,6 +46,8 @@ from text_clustering.prompts import prompt_construct_generate_label, prompt_cons
 
 logger = logging.getLogger(__name__)
 
+CHECKPOINT_FILE = "checkpoint_labelgen.json"
+
 
 def make_run_dir(runs_dir: str, data: str, size: str) -> str:
     """Create and return a timestamped run directory path."""
@@ -61,23 +63,75 @@ def write_json(path: str, data) -> None:
     logger.info("Wrote %s", path)
 
 
+def _save_checkpoint(run_dir: str, processed_chunks: int, all_labels: list[str]) -> None:
+    """Save label-generation progress to a checkpoint file."""
+    ckpt_path = os.path.join(run_dir, CHECKPOINT_FILE)
+    with open(ckpt_path, "w") as f:
+        json.dump({"processed_chunks": processed_chunks, "all_labels": all_labels}, f, indent=2)
+    logger.info("[checkpoint] Saved label-gen progress: %d chunks, %d labels", processed_chunks, len(all_labels))
+
+
+def _load_checkpoint(run_dir: str) -> tuple[int, list[str]] | None:
+    """Load label-generation checkpoint if it exists.
+
+    Returns ``(processed_chunks, all_labels)`` or *None*.
+    """
+    ckpt_path = os.path.join(run_dir, CHECKPOINT_FILE)
+    if not os.path.exists(ckpt_path):
+        return None
+    try:
+        with open(ckpt_path) as f:
+            data = json.load(f)
+        processed = data["processed_chunks"]
+        labels = data["all_labels"]
+        logger.info("[checkpoint] Resuming label-gen from chunk %d (%d labels accumulated)", processed, len(labels))
+        return processed, labels
+    except (json.JSONDecodeError, KeyError) as exc:
+        logger.warning("[checkpoint] Corrupt checkpoint, starting fresh: %s", exc)
+        return None
+
+
+def _remove_checkpoint(run_dir: str) -> None:
+    """Remove the checkpoint file after successful completion."""
+    ckpt_path = os.path.join(run_dir, CHECKPOINT_FILE)
+    if os.path.exists(ckpt_path):
+        os.remove(ckpt_path)
+        logger.info("[checkpoint] Removed label-gen checkpoint (step complete)")
+
+
 def get_sentences(sentence_list):
     return [item["input"] for item in sentence_list]
 
 
-def label_generation(args, client, data_list, chunk_size):
+def label_generation(args, client, data_list, chunk_size, run_dir: str | None = None):
     with open(args.given_label_path, "r") as f:
         given_labels = json.load(f)
 
     all_labels = list(given_labels.get(args.data, []))
     count = 0
 
-    for i in range(0, len(data_list), chunk_size):
+    # ── Checkpoint resume ──
+    start_chunk = 0
+    if run_dir:
+        ckpt = _load_checkpoint(run_dir)
+        if ckpt is not None:
+            start_chunk, all_labels = ckpt
+            count = start_chunk
+
+    total_chunks = (len(data_list) + chunk_size - 1) // chunk_size
+    ckpt_interval = max(5, total_chunks // 20)  # ~5% granularity, at least every 5 chunks
+
+    for chunk_idx, i in enumerate(range(0, len(data_list), chunk_size)):
+        # Skip already-processed chunks
+        if chunk_idx < start_chunk:
+            continue
+
         chunk = data_list[i : i + chunk_size]
         sentences = get_sentences(chunk)
         prompt = prompt_construct_generate_label(sentences, given_labels[args.data])
         raw = chat(prompt, client)
         if raw is None:
+            count += 1
             continue
         count += 1
         try:
@@ -104,6 +158,14 @@ def label_generation(args, client, data_list, chunk_size):
                 break
         elif count % 10 == 0:
             logger.debug("chunk %d — label count so far: %d", count, len(all_labels))
+
+        # ── Checkpoint save ──
+        if run_dir and (chunk_idx + 1) % ckpt_interval == 0:
+            _save_checkpoint(run_dir, chunk_idx + 1, all_labels)
+
+    # Final checkpoint save before returning
+    if run_dir:
+        _save_checkpoint(run_dir, total_chunks, all_labels)
 
     return all_labels
 
@@ -168,13 +230,15 @@ def main(args):
 
     client = ini_client()
     data_list = load_dataset(args.data_path, args.data, args.use_large)
+    # Use a fixed seed for shuffle so checkpoint resume sees the same order.
+    random.seed(42)
     random.shuffle(data_list)
 
     true_labels = get_label_list(data_list)
     logger.info("True cluster count: %d", len(true_labels))
     write_json(os.path.join(run_dir, "labels_true.json"), true_labels)
 
-    all_labels = label_generation(args, client, data_list, args.chunk_size)
+    all_labels = label_generation(args, client, data_list, args.chunk_size, run_dir=run_dir)
     logger.info("Labels proposed (before merge): %d", len(all_labels))
     write_json(os.path.join(run_dir, "labels_proposed.json"), all_labels)
 
@@ -185,6 +249,9 @@ def main(args):
     final_labels = merge_labels(args, all_labels, client, target_k=forced_k)
     write_json(os.path.join(run_dir, "labels_merged.json"), final_labels)
     logger.info("Labels after merge: %d", len(final_labels))
+
+    # Remove checkpoint once step completes successfully
+    _remove_checkpoint(run_dir)
 
     ratio = len(final_labels) / len(true_labels)
     if ratio > 2:
