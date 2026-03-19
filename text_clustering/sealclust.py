@@ -53,11 +53,35 @@ propagate_labels(medoid_labels, cluster_assignments, n_documents)
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+# ── Checkpoint helpers ────────────────────────────────────────────────────
+
+def _save_sealclust_checkpoint(path: str, data: dict) -> None:
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _load_sealclust_checkpoint(path: str) -> dict | None:
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _remove_sealclust_checkpoint(path: str) -> None:
+    if os.path.exists(path):
+        os.remove(path)
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +451,7 @@ def discover_labels(
     representative_texts: list[str],
     client,
     chunk_size: int = 30,
+    run_dir: str | None = None,
 ) -> list[str]:
     """Send representative documents to the LLM in batches to discover labels.
 
@@ -441,6 +466,8 @@ def discover_labels(
         Initialised LLM client.
     chunk_size : int
         Number of representative texts per LLM call.
+    run_dir : str | None
+        If provided, save/load checkpoints to this directory.
 
     Returns
     -------
@@ -453,17 +480,35 @@ def discover_labels(
     all_labels: list[str] = []
     n_chunks = (len(representative_texts) + chunk_size - 1) // chunk_size
 
+    # ── Checkpoint resume ──
+    start_chunk = 0
+    ckpt_path = os.path.join(run_dir, "checkpoint_sealclust_labels.json") if run_dir else None
+    if ckpt_path:
+        ckpt = _load_sealclust_checkpoint(ckpt_path)
+        if ckpt is not None:
+            start_chunk = ckpt["processed_chunks"]
+            all_labels = ckpt["all_labels"]
+            logger.info(
+                "[checkpoint] Resuming label discovery from chunk %d/%d (%d labels)",
+                start_chunk + 1, n_chunks, len(all_labels),
+            )
+
+    ckpt_interval = max(3, n_chunks // 10)  # save every ~10%, at least every 3 chunks
+
     logger.info(
         "Stage 5: Discovering labels from %d representatives in %d chunks (chunk_size=%d)",
         len(representative_texts), n_chunks, chunk_size,
     )
 
-    for i in range(0, len(representative_texts), chunk_size):
+    for chunk_num, i in enumerate(range(0, len(representative_texts), chunk_size)):
+        if chunk_num < start_chunk:
+            continue
+
         chunk = representative_texts[i : i + chunk_size]
         prompt = prompt_discover_labels(chunk)
         raw = chat(prompt, client, max_tokens=4096)
         if raw is None:
-            logger.warning("  Chunk %d: LLM returned None — skipping", i // chunk_size + 1)
+            logger.warning("  Chunk %d: LLM returned None — skipping", chunk_num + 1)
             continue
 
         try:
@@ -471,7 +516,7 @@ def discover_labels(
         except Exception:
             logger.warning(
                 "  Chunk %d: could not parse LLM response — skipping",
-                i // chunk_size + 1,
+                chunk_num + 1,
             )
             continue
 
@@ -489,10 +534,26 @@ def discover_labels(
 
         logger.info(
             "  Chunk %d/%d — labels so far: %d",
-            i // chunk_size + 1, n_chunks, len(all_labels),
+            chunk_num + 1, n_chunks, len(all_labels),
         )
 
+        # ── Checkpoint save ──
+        if ckpt_path and (chunk_num + 1) % ckpt_interval == 0:
+            _save_sealclust_checkpoint(ckpt_path, {
+                "processed_chunks": chunk_num + 1,
+                "all_labels": all_labels,
+            })
+            logger.info(
+                "[checkpoint] Saved label discovery: %d/%d chunks, %d labels",
+                chunk_num + 1, n_chunks, len(all_labels),
+            )
+
     logger.info("Stage 5: Discovered %d unique candidate labels", len(all_labels))
+
+    # Clean up checkpoint on successful completion
+    if ckpt_path:
+        _remove_sealclust_checkpoint(ckpt_path)
+
     return all_labels
 
 

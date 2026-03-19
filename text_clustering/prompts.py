@@ -62,6 +62,43 @@ def prompt_construct_classify(label_list, sentence):
     return prompt
 
 
+def prompt_construct_classify_batch(label_list: list[str], sentences: list[str]) -> str:
+    """Batched classification prompt — classify multiple sentences in a single call.
+
+    Sends N indexed sentences and asks the LLM to return a JSON object mapping
+    each index to its predicted label.  This reduces LLM calls by the batch
+    size factor (e.g. batch_size=10 → 10× fewer calls).
+
+    Parameters
+    ----------
+    label_list : list[str]
+        Available labels to classify into.
+    sentences : list[str]
+        Batch of sentences to classify.
+
+    Returns
+    -------
+    str
+        Prompt string requesting indexed JSON output.
+    """
+    json_example = {"1": "label_a", "2": "label_b", "3": "label_c"}
+    prompt = (
+        "Given the label list, categorize EACH of the following sentences "
+        "into exactly one of the labels.\n\n"
+        f"Label list: {label_list}\n\n"
+        "Sentences:\n"
+    )
+    for i, sentence in enumerate(sentences, 1):
+        prompt += f'{i}. {sentence}\n'
+    prompt += (
+        f"\nReturn a JSON object mapping each sentence number to its label, "
+        f"like: {json_example}\n"
+        f"You MUST classify ALL {len(sentences)} sentences. "
+        f"Use ONLY labels from the label list above."
+    )
+    return prompt
+
+
 # ---------------------------------------------------------------------------
 # Hybrid pipeline prompts
 # ---------------------------------------------------------------------------

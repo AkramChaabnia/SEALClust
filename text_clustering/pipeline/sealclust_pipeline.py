@@ -243,28 +243,22 @@ def run_pipeline(args) -> str:
     cluster_sizes = {str(cid): len(members) for cid, members in sorted(cluster_map.items())}
     _write_json(os.path.join(run_dir, "cluster_sizes.json"), cluster_sizes)
 
-    # ── Stage 5: Label Discovery (LLM on representatives ONLY) ──
-    labels_proposed_path = os.path.join(run_dir, "labels_proposed.json")
-    if os.path.exists(labels_proposed_path):
-        logger.info("[cache] Loading proposed labels from %s", labels_proposed_path)
-        with open(labels_proposed_path) as f:
-            candidate_labels = json.load(f)
-    else:
-        from text_clustering.llm import ini_client
-        client = ini_client()
-
-        representative_texts = [doc["input"] for doc in prototype_docs]
-        candidate_labels = discover_labels(
-            representative_texts, client, chunk_size=args.label_chunk_size,
-        )
-        _write_json(labels_proposed_path, candidate_labels)
-
-    # ── Stage 6: K* Estimation on FULL reduced embeddings ──
-    # Run K* estimation on ALL documents (not just representatives) for better
-    # statistical power.  The full dataset has clearer cluster structure than
-    # the K₀ medoids which are already fragmented by overclustering.
     medoid_indices_sorted = sorted(int(i) for i in medoid_indices)
 
+    # ── Stage 5: Label Discovery (LLM on representatives ONLY) ──
+    # ── Stage 7: Label Consolidation — merge to exactly K* ──
+    #
+    # When --reuse_labels is set we try the shared label cache first.
+    # The cache key requires K* which may come from --k_star (manual) or
+    # Stage 6 (auto).  For manual K* we can short-circuit Stages 5-7 entirely.
+    # For auto K* we must still run Stage 6, then check cache for that K*.
+    reuse_labels = getattr(args, "reuse_labels", False)
+    label_cache_dir = (
+        getattr(args, "label_cache_dir", None)
+        or os.path.join(args.runs_dir, "label_cache")
+    )
+
+    # Resolve K* before touching labels (manual = skip Stage 6)
     if args.k_star:
         k_star = args.k_star
         logger.info("Stage 6: Using manual K*=%d (estimation skipped)", k_star)
@@ -299,19 +293,73 @@ def run_pipeline(args) -> str:
             },
         })
 
-    # ── Stage 7: Label Consolidation — merge to exactly K* ──
-    labels_merged_path = os.path.join(run_dir, "labels_merged.json")
-    if os.path.exists(labels_merged_path):
-        logger.info("[cache] Loading merged labels from %s", labels_merged_path)
-        with open(labels_merged_path) as f:
-            final_labels = json.load(f)
-    else:
-        if 'client' not in dir():
+    logger.info("K* = %d", k_star)
+
+    # ── Label reuse: try loading from shared cache ──
+    _labels_from_cache = False
+    if reuse_labels:
+        from text_clustering.label_cache import list_cached as _lc_list
+        from text_clustering.label_cache import load_labels as _lc_load
+
+        cached = _lc_load(label_cache_dir, args.data, size, n_labels=k_star)
+        if cached is not None:
+            final_labels = cached
+            candidate_labels = cached  # for metadata
+            _write_json(os.path.join(run_dir, "labels_merged.json"), final_labels)
+            logger.info(
+                "[label-reuse] Loaded %d cached labels for K*=%d — skipping Stages 5+7",
+                len(final_labels), k_star,
+            )
+            _labels_from_cache = True
+        else:
+            available = _lc_list(label_cache_dir, args.data, size)
+            if available:
+                logger.info(
+                    "[label-reuse] No exact match for K*=%d; available: %s — generating labels",
+                    k_star, available,
+                )
+            else:
+                logger.info(
+                    "[label-reuse] No cached labels for %s_%s — generating labels",
+                    args.data, size,
+                )
+
+    if not _labels_from_cache:
+        # ── Stage 5 (original): Label Discovery ──
+        labels_proposed_path = os.path.join(run_dir, "labels_proposed.json")
+        if os.path.exists(labels_proposed_path):
+            logger.info("[cache] Loading proposed labels from %s", labels_proposed_path)
+            with open(labels_proposed_path) as f:
+                candidate_labels = json.load(f)
+        else:
             from text_clustering.llm import ini_client
             client = ini_client()
 
-        final_labels = consolidate_labels(candidate_labels, k_star, client)
-        _write_json(labels_merged_path, final_labels)
+            representative_texts = [doc["input"] for doc in prototype_docs]
+            candidate_labels = discover_labels(
+                representative_texts, client, chunk_size=args.label_chunk_size,
+                run_dir=run_dir,
+            )
+            _write_json(labels_proposed_path, candidate_labels)
+
+        # ── Stage 7 (original): Label Consolidation ──
+        labels_merged_path = os.path.join(run_dir, "labels_merged.json")
+        if os.path.exists(labels_merged_path):
+            logger.info("[cache] Loading merged labels from %s", labels_merged_path)
+            with open(labels_merged_path) as f:
+                final_labels = json.load(f)
+        else:
+            if 'client' not in dir():
+                from text_clustering.llm import ini_client
+                client = ini_client()
+
+            final_labels = consolidate_labels(candidate_labels, k_star, client)
+            _write_json(labels_merged_path, final_labels)
+
+        # ── Label reuse: save to shared cache for future runs ──
+        if reuse_labels:
+            from text_clustering.label_cache import save_labels as _lc_save
+            _lc_save(label_cache_dir, args.data, size, final_labels)
 
     # ── Save ground-truth labels ──
     from text_clustering.data import get_label_list
@@ -634,6 +682,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--elbow_k_min", type=int, default=5, help=argparse.SUPPRESS)
     parser.add_argument("--elbow_k_max", type=int, default=200, help=argparse.SUPPRESS)
     parser.add_argument("--elbow_step", type=int, default=5, help=argparse.SUPPRESS)
+
+    # ── Label reuse ──
+    parser.add_argument(
+        "--reuse_labels", action="store_true", default=False,
+        help=(
+            "Enable label caching.  On the first run for a dataset+split+K*, "
+            "generated labels are saved to a shared cache under runs/label_cache/. "
+            "On subsequent runs with the same key, Stages 5+7 are skipped and "
+            "cached labels are loaded instead."
+        ),
+    )
+    parser.add_argument(
+        "--label_cache_dir", type=str, default=None,
+        help="Directory for the shared label cache (default: <runs_dir>/label_cache).",
+    )
 
     return parser
 

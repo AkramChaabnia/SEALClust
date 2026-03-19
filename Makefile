@@ -23,10 +23,12 @@ help:
 	@echo "  release                            bump version, merge develop->main, push tags"
 	@echo ""
 	@echo "  ── Original pipeline ──"
-	@echo "  run-step0                          seed labels (run once)"
-	@echo "  run-step1 data=<dataset>           label generation — prints the run directory"
-	@echo "  run-step2 data=<d> run=<run_dir>   classification (background, resumes on restart)"
-	@echo "  run-step3 data=<d> run=<run_dir>   evaluation → results.json"
+	@echo "  run-step0                              seed labels (run once)"
+	@echo "  run-step1 data=<dataset>               label generation — prints the run directory"
+	@echo "            reuse_labels=1                reuse cached labels (see Section 8 in README)"
+	@echo "  run-step2 data=<d> run=<run_dir>       classification (background, resumes on restart)"
+	@echo "            classify_batch=10             batched mode: 10× fewer LLM calls"
+	@echo "  run-step3 data=<d> run=<run_dir>       evaluation → results.json"
 	@echo ""
 	@echo "  ── K-Medoids accelerated pipeline ──"
 	@echo "  run-kmedoids data=<d> [k=100]      pre-cluster → medoid_documents.jsonl"
@@ -47,6 +49,7 @@ help:
 	@echo "                                     Stages 1–7: embed + PCA + overcluster + labels + K* + consolidate"
 	@echo "                                     kmethod: silhouette (default) | calinski | bic | ensemble"
 	@echo "                                     k0=N → overclustering size, kstar=N → manual K*"
+	@echo "                                     reuse_labels=1 → reuse cached labels"
 	@echo "  run-sealclust-full data=<d> [k0=300] [kstar=0] [kmethod=silhouette]"
 	@echo "                                     Stages 1–9 + evaluation in one command"
 	@echo "  run-sealclust-classify data=<d> run=<run_dir>"
@@ -76,6 +79,7 @@ help:
 	@echo "  ── Hybrid Pipeline (LLM + Embedding) ──"
 	@echo "  run-hybrid data=<d> [step=N]       Single step 1-8 or steps 1-5 (default)"
 	@echo "                                     step=N → run only step N; cont=<dir> → resume"
+	@echo "                                     reuse_labels=1 → reuse cached labels"
 	@echo "  run-hybrid-full data=<d>            Full pipeline: steps 1-8 + evaluation"
 	@echo "                                     hybrid_p=0.1 hybrid_k_min=2 hybrid_k_max=50"
 	@echo "                                     target_k=N → override automatic K optimisation"
@@ -155,10 +159,11 @@ ifndef data
 	$(error data is required, e.g. make run-step1 data=massive_scenario)
 endif
 	mkdir -p logs
-	$(BIN)tc-label-gen --data $(data) 2>&1 | tee logs/$(data)_label_gen.log
+	$(BIN)tc-label-gen --data $(data) $(if $(reuse_labels),--reuse_labels,) 2>&1 | tee logs/$(data)_label_gen.log
 
 # usage: make run-step2 data=massive_scenario run=./runs/massive_scenario_small_20260220_143012
 # Runs in the background; resumes automatically if a checkpoint.json exists in run_dir.
+classify_batch ?= 1
 run-step2:
 ifndef data
 	$(error data is required)
@@ -167,7 +172,7 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_20260220_143012)
 endif
 	mkdir -p logs
-	nohup $(BIN)tc-classify --data $(data) --run_dir $(run) \
+	nohup $(BIN)tc-classify --data $(data) --run_dir $(run) --batch_size $(classify_batch) \
 		>> logs/$(data)_classification.log 2>&1 &
 	@echo "running in background — tail -f logs/$(data)_classification.log"
 	@echo "to resume after interruption, re-run the same command"
@@ -267,7 +272,7 @@ ifndef data
 	$(error data is required, e.g. make run-sealclust data=massive_scenario)
 endif
 	mkdir -p logs
-	$(BIN)tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) 2>&1 | tee logs/$(data)_sealclust.log
+	$(BIN)tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) $(if $(reuse_labels),--reuse_labels,) 2>&1 | tee logs/$(data)_sealclust.log
 
 # usage: make run-sealclust-full data=massive_scenario k0=300
 #        make run-sealclust-full data=massive_scenario k0=300 kstar=18
@@ -277,7 +282,7 @@ ifndef data
 	$(error data is required, e.g. make run-sealclust-full data=massive_scenario)
 endif
 	mkdir -p logs
-	$(BIN)tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) --full 2>&1 | tee logs/$(data)_sealclust_full.log
+	$(BIN)tc-sealclust --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) --full $(if $(reuse_labels),--reuse_labels,) 2>&1 | tee logs/$(data)_sealclust_full.log
 
 # usage: make run-sealclust-classify data=massive_scenario run=./runs/<run_dir>
 run-sealclust-classify:
@@ -324,6 +329,7 @@ endif
 		$(if $(cont),--continue_from $(cont),) \
 		--p $(hybrid_p) --k_min $(hybrid_k_min) --k_max $(hybrid_k_max) \
 		--llm_batch_size $(hybrid_batch) --covariance_type $(hybrid_cov) \
+		$(if $(reuse_labels),--reuse_labels,) \
 		2>&1 | tee logs/$(data)_hybrid.log
 
 # usage: make run-hybrid-full data=massive_scenario
@@ -339,6 +345,7 @@ endif
 		--p $(hybrid_p) --k_min $(hybrid_k_min) --k_max $(hybrid_k_max) \
 		--llm_batch_size $(hybrid_batch) --covariance_type $(hybrid_cov) \
 		$(if $(target_k),--target_k $(target_k),) \
+		$(if $(reuse_labels),--reuse_labels,) \
 		2>&1 | tee logs/$(data)_hybrid_full.log
 
 # ── Baselines (Mode G) ──────────────────────────────────────────────────

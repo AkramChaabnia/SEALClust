@@ -19,13 +19,14 @@ For the full research log — experimental results, code fixes, model investigat
 5. [Usage — All Pipeline Modes](#5-usage--all-pipeline-modes)
 6. [CLI Reference](#6-cli-reference)
 7. [Resuming an Interrupted Run](#7-resuming-an-interrupted-run)
-8. [Run Directory Structure](#8-run-directory-structure)
-9. [Evaluation & Metrics](#9-evaluation--metrics)
-10. [Configuration Reference](#10-configuration-reference)
-11. [Troubleshooting](#11-troubleshooting)
-12. [Repository Structure](#12-repository-structure)
-13. [Development](#13-development)
-14. [Citation](#14-citation)
+8. [Label Reuse (Caching)](#8-label-reuse-caching)
+9. [Run Directory Structure](#9-run-directory-structure)
+10. [Evaluation & Metrics](#10-evaluation--metrics)
+11. [Configuration Reference](#11-configuration-reference)
+12. [Troubleshooting](#12-troubleshooting)
+13. [Repository Structure](#13-repository-structure)
+14. [Development](#14-development)
+15. [Citation](#15-citation)
 
 ---
 
@@ -137,10 +138,10 @@ coverage, then uses the LLM to discover the right number of meaningful categorie
 | 1 | `embeddings.npy` | Skip embedding |
 | 2 | `embeddings_reduced.npy` | Skip PCA/t-SNE |
 | 3 | `sealclust_metadata.json` | Skip overclustering |
-| 5 | `labels_proposed.json` | Skip label discovery |
+| 5 | `labels_proposed.json` | Skip label discovery (has intra-stage checkpoint) |
 | 6 | `k_estimation.json` | Skip K\* estimation |
 | 7 | `labels_merged.json` | Skip label consolidation |
-| 8 | `classifications.json` | Has its own checkpoint system |
+| 8 | `classifications.json` | Has intra-stage checkpoint (`checkpoint_classify.json`) |
 | 9 | `classifications_full.json` | Skip propagation |
 
 ---
@@ -243,11 +244,14 @@ conda run -n ppd tc-label-gen --data massive_scenario
 # Step 2: Classification (~2,974 LLM calls — one per document)
 conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
 
+# Step 2 (optimised): Batched classification (~298 LLM calls with batch_size=10)
+conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --batch_size 10
+
 # Step 3: Evaluation
 conda run -n ppd tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 ```
 
-**Cost**: ~3,000 LLM calls · **Time**: 1–3 hours
+**Cost**: ~3,000 LLM calls (unbatched) or ~500 (batched, `--batch_size 10`) · **Time**: 1–3h (unbatched) or ~20min (batched)
 
 ---
 
@@ -458,6 +462,7 @@ make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
 | K-Medoids on raw embeddings | B | `tc-kmedoids` → `tc-label-gen` → `tc-classify --medoid_mode` |
 | GMM soft clusters | C | `tc-gmm` → `tc-label-gen` → `tc-classify --representative_mode` |
 | Paper baseline (most expensive) | A | `tc-seed-labels` → `tc-label-gen` → `tc-classify` → `tc-evaluate` |
+| Paper baseline (batched, 10× faster) | A | `tc-classify --batch_size 10 --run_dir <dir>` |
 | Reuse cached embeddings | Any | Pass `--run_dir ./runs/<existing_dir>` |
 
 ---
@@ -481,6 +486,7 @@ make run-sealclust-propagate data=massive_scenario run=./runs/<run_dir>
 make run-step0
 make run-step1 data=massive_scenario
 make run-step2 data=massive_scenario run=./runs/<run_dir>
+make run-step2 data=massive_scenario run=./runs/<run_dir> classify_batch=10  # 10× faster
 make run-step3 data=massive_scenario run=./runs/<run_dir>
 
 # ── K-Medoids (Mode B) ──
@@ -517,6 +523,7 @@ make run-graphclust data=massive_scenario
 | `kstar` | `0` | SEALClust manual K\* (`0` = auto) |
 | `kmethod` | `silhouette` | K\* estimation method |
 | `run` | *(for separate stages)* | Run directory path |
+| `classify_batch` | `1` | Classification batch size (`10` = 10× fewer LLM calls) |
 | `hybrid_p` | `0.1` | Hybrid overclustering fraction |
 | `hybrid_k_min` | `2` | Hybrid K sweep minimum |
 | `hybrid_k_max` | `50` | Hybrid K sweep maximum |
@@ -591,6 +598,7 @@ make run-graphclust data=massive_scenario
 |------|------|---------|-------------|
 | `--data NAME` | str | `arxiv_fine` | Dataset name |
 | `--run_dir PATH` | str | **required** | Run dir with `labels_merged.json` |
+| `--batch_size N` | int | `1` | Sentences per LLM call (`10`–`20` recommended for 10× speedup) |
 | `--medoid_mode` | flag | — | Classify only medoid docs (Modes B, D, E) |
 | `--representative_mode` | flag | — | Classify only GMM representative docs (Mode C) |
 
@@ -664,17 +672,73 @@ make run-graphclust data=massive_scenario
 
 ## 7. Resuming an Interrupted Run
 
-The pipeline caches every stage's output. If interrupted, pass the same `--run_dir`:
+Every pipeline supports **two layers** of fault tolerance:
+
+1. **Stage-level caching** — Each stage writes its output to a file (e.g. `embeddings.npy`, `labels_proposed.json`). If the file already exists when the pipeline is re-run with the same `--run_dir`, the stage is skipped entirely. This is automatic and requires no special flags.
+
+2. **Intra-stage checkpointing** — Long-running LLM loops (label generation, classification, medoid labelling) save progress to a `checkpoint_*.json` file at regular intervals. If interrupted, the same command resumes from the last checkpoint. Checkpoint files are automatically deleted once the stage completes successfully.
+
+### 7.1 Quick Resume (All Pipelines)
+
+Pass the same `--run_dir` to continue from where it stopped:
 
 ```bash
-# Stages 1-7 are cached, continues from where it stopped
+# SEAL-Clust: stages 1-7 cached, continues from the first incomplete stage
 tc-sealclust --data massive_scenario --k0 300 --k_star 18 \
     --run_dir ./runs/massive_scenario_small_20260314_150000 --full
+
+# Hybrid: same pattern
+tc-hybrid --data massive_scenario --target_k 18 \
+    --run_dir ./runs/<run_dir> --full
+
+# Graph clustering: same pattern
+tc-graphclust --data massive_scenario --target_k 18 \
+    --run_dir ./runs/<run_dir> --full
+
+# Original 3-step: re-run Step 2 (it resumes from checkpoint)
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
 ```
 
-### Special Cases
+### 7.2 Checkpoint Files Reference
 
-**Stage 8 checkpoint resumption**: `--full` re-runs Stage 8 from scratch. For checkpoint-based resumption (saves every 200 docs), run `tc-classify` separately:
+| Pipeline | Stage | Checkpoint File | What Is Saved | Save Interval |
+|----------|-------|-----------------|---------------|:-------------:|
+| **Original** (Step 1) | Label Generation | `checkpoint_labelgen.json` | Processed chunk count + all labels discovered so far | Every ~5% of chunks |
+| **Original** (Step 2) | Classification | `checkpoint_classify.json` | Processed sample count + classification dict | Every 200 samples (unbatched) or every ~10 batches (batched) |
+| **Hybrid** (Step 1) | LLM Label Gen | `checkpoint_hybrid_step1.json` | Processed batch count + per-document labels | Every ~5% of batches |
+| **Hybrid** (Step 7) | Medoid Labelling | `checkpoint_hybrid_step7.json` | Processed count + medoid label assignments | Every ~5% of medoids |
+| **SEAL-Clust** (Stage 5) | Label Discovery | `checkpoint_sealclust_labels.json` | Processed chunk count + candidate labels | Every ~10% of chunks |
+| **Graph Clust** (Step 3) | Community Labelling | `checkpoint_graphclust_step3.json` | Labelled community IDs + names | Every ~10% of communities |
+
+> **Note**: Checkpoint files are ephemeral — they exist only during an active run. Once the stage finishes, the checkpoint is deleted automatically.
+
+### 7.3 How Checkpoints Work
+
+When a pipeline stage is interrupted (Ctrl+C, timeout, crash):
+
+```
+runs/massive_scenario_small_20260314_150000/
+├── checkpoint_classify.json          ← checkpoint exists → stage was interrupted
+├── classifications.json              ← partial results (also written at each checkpoint)
+├── labels_merged.json                ← completed by previous stage
+└── ...
+```
+
+Simply re-run the **exact same command**. The pipeline will:
+1. Skip all stages whose output files already exist (stage-level cache)
+2. Within the interrupted stage, load the checkpoint and skip already-processed items
+3. Continue from where it left off
+4. Delete the checkpoint file when the stage finishes
+
+```bash
+# Example: classification was interrupted at sample 1500/2974
+# Just re-run — it resumes from sample 1500
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
+```
+
+### 7.4 Special Cases
+
+**SEAL-Clust `--full` and Stage 8**: The `--full` flag chains all stages. If Stage 8 (classification) was interrupted, re-running with `--full` will skip Stages 1–7 (cached) and resume Stage 8 from its checkpoint. You can also run Stage 8 separately for finer control:
 
 ```bash
 tc-classify --data massive_scenario \
@@ -684,16 +748,100 @@ tc-classify --data massive_scenario \
 **Re-run with different K\***: Delete K\*-dependent files and re-run:
 
 ```bash
-rm ./runs/<run_dir>/labels_merged.json classifications.json classifications_full.json results.json
+rm ./runs/<run_dir>/labels_merged.json ./runs/<run_dir>/classifications.json \
+   ./runs/<run_dir>/classifications_full.json ./runs/<run_dir>/results.json
 tc-sealclust --data massive_scenario --k0 300 --k_star 25 \
     --run_dir ./runs/<run_dir> --full
 ```
 
 > **💡** Keep `labels_proposed.json` — candidate labels don't depend on K\*.
 
+**Original Step 1 (label generation)**: Uses a fixed random seed (`42`) for shuffling, so checkpoint resume sees the same document order. If you need a different shuffle, delete the checkpoint before re-running.
+
+### 7.5 Limitations
+
+- **Baselines** (`tc-baseline`): KMeans and GMM baselines are fully deterministic and fast (no LLM calls), so checkpointing is not needed. If interrupted, simply re-run — embedding computation is cached.
+- **Evaluation** (`tc-evaluate`): Pure computation on existing files, finishes in seconds. No checkpoint needed.
+- **Cross-stage dependencies**: Deleting a stage's output and re-running will not automatically invalidate downstream stages. If you re-run Stage 5 (labels), you must also delete Stage 7+ outputs.
+
 ---
 
-## 8. Run Directory Structure
+## 8. Label Reuse (Caching)
+
+By default every pipeline run regenerates labels from scratch via LLM calls.
+When you are iterating on the *same dataset* with the *same number of clusters*,
+this is wasteful.  The **`--reuse_labels`** flag enables a shared label cache
+that persists across runs.
+
+### 8.1 How It Works
+
+| Run # | Cache state | Behaviour |
+|-------|-------------|-----------|
+| 1st   | miss        | Generate labels normally via LLM, then **save** them to `runs/label_cache/` |
+| 2nd+  | hit         | **Load** cached labels — skip all LLM label-generation calls |
+
+The cache key is `{dataset}_{split}_k{n_labels}`, e.g. `massive_scenario_small_k18.json`.
+
+### 8.2 Supported Pipelines
+
+| Pipeline | Flag | Stages skipped on cache hit |
+|----------|------|-----------------------------|
+| Original (`tc-label-gen`) | `--reuse_labels` | Label generation + merge (entire Step 1) |
+| SEAL-Clust (`tc-sealclust`) | `--reuse_labels` | Stage 5 (Label Discovery) + Stage 7 (Consolidation) |
+| Hybrid (`tc-hybrid`) | `--reuse_labels` | Step 5 (LLM Label Alignment) |
+
+Graph clustering (`tc-graphclust`) generates labels per-community post-hoc and does not use this feature.
+
+### 8.3 CLI Examples
+
+```bash
+# Original pipeline — first run (generates + caches)
+tc-label-gen --data massive_scenario --reuse_labels
+
+# Original pipeline — second run (loads from cache, 0 LLM calls)
+tc-label-gen --data massive_scenario --reuse_labels
+
+# SEAL-Clust — with manual K* (best for cache reuse)
+tc-sealclust --data massive_scenario --k_star 18 --reuse_labels --full
+
+# SEAL-Clust — auto K* (cache checked after K* estimation in Stage 6)
+tc-sealclust --data massive_scenario --reuse_labels --full
+
+# Hybrid — with explicit target K
+tc-hybrid --data massive_scenario --target_k 18 --reuse_labels --full
+
+# Makefile shortcuts — add reuse_labels=1
+make run-step1 data=massive_scenario reuse_labels=1
+make run-sealclust-full data=massive_scenario kstar=18 reuse_labels=1
+make run-hybrid-full data=massive_scenario target_k=18 reuse_labels=1
+```
+
+### 8.4 Cache Directory
+
+```
+runs/
+└── label_cache/
+    ├── massive_scenario_small_k18.json    # ["Alarm & Timer", "Audio & Music", ...]
+    ├── massive_scenario_small_k19.json
+    ├── clinc_small_k150.json
+    └── ...
+```
+
+Each file is a plain JSON array of label strings.
+
+Use `--label_cache_dir <path>` to override the default location (`runs/label_cache/`).
+
+### 8.5 Tips
+
+- **Specify K explicitly** for deterministic cache hits (`--target_k`, `--k_star`).
+  When K is determined automatically (e.g. silhouette search), the cache key depends
+  on the estimated K which may vary between runs.
+- **Clear the cache** by deleting `runs/label_cache/` or individual files.
+- Default behaviour (no `--reuse_labels`) is **unchanged** — labels are always regenerated.
+
+---
+
+## 9. Run Directory Structure
 
 ```
 runs/
@@ -737,7 +885,7 @@ runs/
 
 ---
 
-## 9. Evaluation & Metrics
+## 10. Evaluation & Metrics
 
 Three standard clustering metrics computed via **Hungarian matching** (optimal 1-to-1 alignment):
 
@@ -756,7 +904,7 @@ tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 
 ---
 
-## 10. Configuration Reference
+## 11. Configuration Reference
 
 ### Environment Variables (`.env`)
 
@@ -825,7 +973,7 @@ EMBEDDING_MODEL=all-MiniLM-L6-v2
 
 ---
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 ### "Command not found: tc-sealclust"
 
@@ -854,7 +1002,7 @@ Some documents couldn't be classified. Try increasing K\*, or re-run Stage 7 for
 
 ---
 
-## 12. Repository Structure
+## 13. Repository Structure
 
 ```
 text-clustering-llm/
@@ -875,6 +1023,7 @@ text-clustering-llm/
 │   ├── _kmedoids_impl.py          # Custom K-Medoids (PAM alternate)
 │   ├── visualization.py           # t-SNE cluster visualisation
 │   ├── logging_config.py          # Logging setup
+│   ├── label_cache.py             # Shared label cache for --reuse_labels
 │   └── pipeline/                  # CLI entry points for all modes
 ├── paper/                         # Backward-compat shims
 ├── tools/
@@ -893,7 +1042,7 @@ text-clustering-llm/
 
 ---
 
-## 13. Development
+## 14. Development
 
 Branching: `main` ← `develop` ← `feature/<desc>` / `fix/<desc>` / `docs/<desc>`  
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
@@ -908,7 +1057,7 @@ make release          # bump version, merge develop→main, push tags
 
 ---
 
-## 14. Citation
+## 15. Citation
 
 ```bibtex
 @inproceedings{huang2024text,

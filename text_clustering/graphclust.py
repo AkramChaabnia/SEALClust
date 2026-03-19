@@ -64,13 +64,37 @@ with K=18: **~18 LLM calls**.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from collections import Counter
 
 import numpy as np
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+# ── Checkpoint helpers ────────────────────────────────────────────────────
+
+def _save_gc_checkpoint(path: str, data: dict) -> None:
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _load_gc_checkpoint(path: str) -> dict | None:
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _remove_gc_checkpoint(path: str) -> None:
+    if os.path.exists(path):
+        os.remove(path)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +419,7 @@ def step3_label_communities(
     client,
     samples_per_community: int = 8,
     random_state: int = 42,
+    run_dir: str | None = None,
 ) -> dict[int, str]:
     """Name each discovered community by sampling representatives.
 
@@ -413,6 +438,8 @@ def step3_label_communities(
     samples_per_community : int
         Number of documents to sample per community for labelling.
     random_state : int
+    run_dir : str | None
+        If provided, save/load checkpoints to this directory.
 
     Returns
     -------
@@ -432,12 +459,28 @@ def step3_label_communities(
     community_names: dict[int, str] = {}
     unique_comms = sorted(set(community_labels))
 
+    # ── Checkpoint resume ──
+    ckpt_path = os.path.join(run_dir, "checkpoint_graphclust_step3.json") if run_dir else None
+    processed_comms: set[int] = set()
+    if ckpt_path:
+        ckpt = _load_gc_checkpoint(ckpt_path)
+        if ckpt is not None:
+            community_names = {int(k): v for k, v in ckpt["community_names"].items()}
+            processed_comms = set(int(c) for c in ckpt["processed_comms"])
+            logger.info("[checkpoint] Resuming graphclust step 3 from %d/%d communities", len(processed_comms), n_communities)
+
+    ckpt_interval = max(5, n_communities // 10)  # save every ~10%
+    labelled_count = len(processed_comms)
+
     for comm_id in tqdm(
         unique_comms,
         desc="Step 3: Labelling communities",
         unit="comm",
         ncols=90,
     ):
+        if int(comm_id) in processed_comms:
+            continue
+
         members = np.where(community_labels == comm_id)[0]
         n_sample = min(samples_per_community, len(members))
         sample_idx = rng.choice(members, size=n_sample, replace=False)
@@ -464,10 +507,23 @@ def step3_label_communities(
                     label = raw.strip().strip('"').strip("'")
 
         community_names[int(comm_id)] = label
+        labelled_count += 1
         logger.info(
             "  Community %d (%d docs): \"%s\"",
             comm_id, len(members), label,
         )
+
+        # ── Checkpoint save ──
+        if ckpt_path and labelled_count % ckpt_interval == 0:
+            _save_gc_checkpoint(ckpt_path, {
+                "processed_comms": list(community_names.keys()),
+                "community_names": {str(k): v for k, v in community_names.items()},
+            })
+            logger.info("[checkpoint] Saved graphclust step 3: %d/%d communities", labelled_count, n_communities)
+
+    # Clean up checkpoint on successful completion
+    if ckpt_path:
+        _remove_gc_checkpoint(ckpt_path)
 
     return community_names
 
