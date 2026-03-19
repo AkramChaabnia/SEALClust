@@ -4,7 +4,7 @@
 > Based on: [Text Clustering as Classification with LLMs](https://arxiv.org/abs/2410.00927) (Chen Huang, Guoxiu He, 2024)  
 > Original code: [ECNU-Text-Computing/Text-Clustering-via-LLM](https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM)
 
-This repository reproduces the paper's baseline and introduces **SEAL-Clust** (**S**calable **E**fficient **A**utonomous **L**LM **Clust**ering) — a 9-stage pipeline that reduces LLM cost by **10×** while maintaining competitive accuracy through overclustering + representative-based label discovery. It also provides a **Hybrid Pipeline** that combines LLM-based label generation with embedding-based K optimisation and GMM overclustering, plus **LLM-free baselines** (KMeans / GMM) for benchmarking.
+This repository reproduces the paper's baseline and introduces **SEAL-Clust** (**S**calable **E**fficient **A**utonomous **L**LM **Clust**ering) — a 9-stage pipeline that reduces LLM cost by **10×** while maintaining competitive accuracy through overclustering + representative-based label discovery. It also provides a **Hybrid Pipeline** that combines LLM-based label generation with embedding-based K optimisation and GMM overclustering, **Graph Community Clustering** — a fundamentally different approach that builds a k-NN embedding graph, discovers clusters via Louvain community detection, and uses the LLM only for post-hoc labelling, plus **LLM-free baselines** (KMeans / GMM) for benchmarking.
 
 For the full research log — experimental results, code fixes, model investigation, and key findings — see [FINDINGS.md](./FINDINGS.md).
 
@@ -408,6 +408,43 @@ tc-baseline --data massive_scenario --method gmm --k 18 --covariance_type diag
 
 ---
 
+### Mode H — Graph Community Clustering (Louvain + LLM Labelling)
+
+A **fundamentally different approach** to text clustering.  Instead of using the LLM as a classifier (shared by Modes A–F) or geometric partitioning (KMeans/GMM in Mode G), Mode H discovers clusters via **graph community detection** on a k-NN embedding similarity graph.
+
+**Architecture** — 3-Step Pipeline:
+1. **Build k-NN Graph** — Each document connects to its k most similar documents (cosine similarity in embedding space, above a minimum threshold)
+2. **Community Detection** — Custom Louvain modularity optimisation discovers natural clusters via graph topology (binary search over resolution γ to match target_k)
+3. **LLM Post-hoc Labelling** — The LLM names each discovered community from representative samples (~K LLM calls)
+
+**Key differences from all other modes**:
+- No labels exist during clustering — they are extracted **post-hoc**
+- Clustering emerges from **graph community structure** (modularity Q), not geometric partitioning (centroids/Gaussians)
+- Louvain can discover **non-convex, non-spherical** clusters that KMeans/GMM cannot
+- The LLM is used **only for naming** communities, not for clustering decisions
+
+```bash
+# Full pipeline (all 3 steps + evaluation)
+tc-graphclust --data massive_scenario --target_k 18 --full
+
+# Auto-detect K (no target_k — Louvain decides)
+tc-graphclust --data massive_scenario --full
+
+# Steps 1–2 only (clustering without labels)
+tc-graphclust --data massive_scenario --target_k 18
+
+# Step 3 + evaluation only (requires existing run)
+tc-graphclust --data massive_scenario --run_dir ./runs/<dir> --label_only
+
+# Using Make
+make run-graphclust-full data=massive_scenario target_k=18
+make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
+```
+
+**Cost**: ~K LLM calls (post-hoc labelling only, e.g. ~18 for massive_scenario) · **Time**: 2–5min
+
+---
+
 ### Mode Quick Reference
 
 | Scenario | Mode | Command |
@@ -415,6 +452,7 @@ tc-baseline --data massive_scenario --method gmm --k 18 --covariance_type diag
 | **One command, full automation** ⭐ | E | `tc-sealclust --data X --k0 300 --full` |
 | **One command, known K\*** ⭐ | E | `tc-sealclust --data X --k0 300 --k_star N --full` |
 | **Hybrid: LLM + embedding K-opt** | F | `tc-hybrid --data X --full` |
+| **Graph community clustering** | H | `tc-graphclust --data X --target_k N --full` |
 | **Baseline: no LLM benchmark** | G | `tc-baseline --data X --method kmeans --k N` |
 | Debug / inspect stages | D | `tc-sealclust` → `tc-classify` → `--propagate` |
 | K-Medoids on raw embeddings | B | `tc-kmedoids` → `tc-label-gen` → `tc-classify --medoid_mode` |
@@ -464,6 +502,11 @@ make run-hybrid data=massive_scenario step=4     # single step
 make run-baseline-kmeans data=massive_scenario k=18
 make run-baseline-gmm data=massive_scenario k=18
 make run-baseline-kmeans data=massive_scenario auto_k=1 k_min=5 k_max=30
+
+# ── Graph Community Clustering (Mode H) ──
+make run-graphclust-full data=massive_scenario target_k=18
+make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
+make run-graphclust data=massive_scenario
 ```
 
 | Variable | Default | Description |
@@ -480,6 +523,10 @@ make run-baseline-kmeans data=massive_scenario auto_k=1 k_min=5 k_max=30
 | `hybrid_batch` | `30` | Hybrid LLM batch size |
 | `auto_k` | — | Enable auto-K for baselines (`1`) |
 | `pca` | — | PCA dims for baselines |
+| `graph_knn` | `15` | Graph clustering: k-NN neighbours |
+| `min_sim` | `0.3` | Graph clustering: min cosine similarity |
+| `resolution` | `1.0` | Graph clustering: Louvain resolution |
+| `target_k` | — | Graph clustering / Hybrid: target K |
 
 ---
 
@@ -584,6 +631,27 @@ make run-baseline-kmeans data=massive_scenario auto_k=1 k_min=5 k_max=30
 | `--covariance_type M` | str | `full` | GMM covariance: `full`/`tied`/`diag`/`spherical` |
 | `--use_large` | flag | — | Use `large.jsonl` split |
 
+### `tc-graphclust` — Graph Clustering (Mode H)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--data NAME` | str | `massive_scenario` | Dataset name |
+| `--full` | flag | — | Run all 5 steps + evaluation |
+| `--label_only` | flag | — | Run Step 5 + evaluation only (requires `--run_dir`) |
+| `--step N` | int | — | Run only step N (1–5) |
+| `--n_anchors N` | int | `15` | Number of anchor documents |
+| `--anchor_method M` | str | `farthest_point` | `farthest_point` / `random` |
+| `--judge_batch_size N` | int | `50` | Documents per LLM pairwise-judge call |
+| `--similarity_threshold F` | float | `0.15` | Min embedding cosine sim for LLM judging |
+| `--top_k_anchors N` | int | `0` | Only judge each doc against top-K anchors (`0` = all) |
+| `--edge_threshold F` | float | `0.3` | Min affinity-vector cosine sim for graph edges |
+| `--knn N` | int | `15` | k-nearest neighbours per node |
+| `--resolution F` | float | `1.0` | Louvain resolution γ (higher → more clusters) |
+| `--target_k N` | int | `0` | Target communities (`0` = auto via resolution) |
+| `--samples_per_community N` | int | `8` | Docs sampled per community for labelling |
+| `--run_dir PATH` | str | — | Reuse existing run directory |
+| `--use_large` | flag | — | Use `large.jsonl` split |
+
 ### Other Commands
 
 | Command | Purpose |
@@ -647,6 +715,26 @@ runs/
     └── sealclust_pipeline.log      # Full pipeline log
 ```
 
+**Graph Clustering (Mode H)** produces a different set of files:
+
+```
+runs/
+└── massive_scenario_small_graphclust_20260318_150000/
+    ├── embeddings.npy                    # 384D embeddings (shared with other modes)
+    ├── graphclust_anchors.json           # Step 1: Anchor indices + method
+    ├── graphclust_affinity.npy           # Step 2: Binary affinity matrix (N × A)
+    ├── graphclust_graph.npz              # Step 3: Sparse edge list (rows, cols, weights)
+    ├── graphclust_communities.json       # Step 4: Community assignments + sizes
+    ├── graphclust_community_names.json   # Step 5: {community_id: topic_label}
+    ├── graphclust_metadata.json          # Pipeline parameters + stats
+    ├── labels_true.json                  # Ground-truth label list
+    ├── labels_merged.json                # Community labels (for evaluation compat)
+    ├── classifications.json              # {label: [sentences...]}
+    ├── classifications_full.json         # Same (no propagation needed — all docs assigned)
+    ├── results.json                      # ACC, NMI, ARI
+    └── graphclust_pipeline.log           # Full pipeline log
+```
+
 ---
 
 ## 9. Evaluation & Metrics
@@ -705,6 +793,13 @@ HYBRID_LLM_BATCH_SIZE=30         # Documents per LLM label-gen call
 HYBRID_P=0.1                     # GMM overclustering fraction (p × N)
 HYBRID_K_MIN=2                   # Min K for silhouette sweep
 HYBRID_K_MAX=50                  # Max K for silhouette sweep
+
+# ── Graph Clustering (LPSGC) ──
+GRAPHCLUST_N_ANCHORS=15          # Number of anchor documents
+GRAPHCLUST_EDGE_THRESHOLD=0.3    # Min cosine sim for graph edges
+GRAPHCLUST_KNN=15                # k-nearest neighbours per node
+GRAPHCLUST_RESOLUTION=1.0        # Louvain resolution γ
+GRAPHCLUST_SIMILARITY_THRESHOLD=0.15  # Embedding pre-filter threshold
 
 # ── Embedding ──
 EMBEDDING_MODEL=all-MiniLM-L6-v2
