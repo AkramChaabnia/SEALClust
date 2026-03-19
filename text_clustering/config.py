@@ -58,8 +58,13 @@ SEALCLUST_ELBOW_STEP: int = int(os.getenv("SEALCLUST_ELBOW_STEP", "5"))
 # Label generation chunk size for representative batches
 SEALCLUST_LABEL_CHUNK_SIZE: int = int(os.getenv("SEALCLUST_LABEL_CHUNK_SIZE", "30"))
 
-# ── Hybrid pipeline settings ─────────────────────────────────────────────
+# ── Hybrid pipeline settings ─────────────────────────────────────────
 HYBRID_LLM_BATCH_SIZE: int = int(os.getenv("HYBRID_LLM_BATCH_SIZE", "30"))
 HYBRID_P: float = float(os.getenv("HYBRID_P", "0.1"))  # overclustering proportion
 HYBRID_K_MIN: int = int(os.getenv("HYBRID_K_MIN", "2"))
 HYBRID_K_MAX: int = int(os.getenv("HYBRID_K_MAX", "50"))
+
+# ── Graph Community Clustering settings ──────────────────────────────
+GRAPHCLUST_KNN: int = int(os.getenv("GRAPHCLUST_KNN", "15"))
+GRAPHCLUST_MIN_SIMILARITY: float = float(os.getenv("GRAPHCLUST_MIN_SIMILARITY", "0.3"))
+GRAPHCLUST_RESOLUTION: float = float(os.getenv("GRAPHCLUST_RESOLUTION", "1.0"))

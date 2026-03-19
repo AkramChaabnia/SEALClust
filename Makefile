@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate run-hybrid run-hybrid-full run-baseline-kmeans run-baseline-gmm
+.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate run-hybrid run-hybrid-full run-baseline-kmeans run-baseline-gmm run-graphclust run-graphclust-full
 
 # ── Environment auto-detection ──────────────────────────────────────────
 # Priority: $(CONDA_PREFIX)/bin/ (if active) → .venv/bin/ → bare (system PATH)
@@ -93,6 +93,18 @@ help:
 	@echo "  Example (Baselines):"
 	@echo "    make run-baseline-kmeans data=massive_scenario k=18"
 	@echo "    make run-baseline-gmm data=massive_scenario auto_k=1 k_min=5 k_max=30"
+	@echo ""
+	@echo "  ── Graph Community Clustering (Mode H) ──"
+	@echo "  run-graphclust data=<d> [target_k=N]"
+	@echo "                                     Steps 1–2: k-NN graph + Louvain communities"
+	@echo "  run-graphclust-full data=<d> [target_k=N]"
+	@echo "                                     Steps 1–3 + evaluation end-to-end"
+	@echo "                                     knn=15 min_sim=0.3 resolution=1.0"
+	@echo ""
+	@echo "  Example (Graph Community Clustering):"
+	@echo "    make run-graphclust-full data=massive_scenario target_k=18"
+	@echo "    make run-graphclust-full data=massive_scenario knn=20 resolution=1.5"
+	@echo "    make run-graphclust data=massive_scenario"
 	@echo ""
 
 setup:
@@ -364,3 +376,39 @@ endif
 		--k_min $(baseline_k_min) --k_max $(baseline_k_max) \
 		--covariance_type $(baseline_cov) \
 		2>&1 | tee logs/$(data)_baseline_gmm.log
+
+# ── Graph Community Clustering (Mode H) ─────────────────────────────
+
+# usage: make run-graphclust data=massive_scenario
+#        make run-graphclust data=massive_scenario target_k=18
+# Default: Steps 1–2 (k-NN Graph + Louvain Community Detection)
+graph_knn    ?= 15
+min_sim      ?= 0.3
+resolution   ?= 1.0
+samples_per  ?= 8
+run-graphclust:
+ifndef data
+	$(error data is required, e.g. make run-graphclust data=massive_scenario)
+endif
+	mkdir -p logs
+	$(BIN)tc-graphclust --data $(data) \
+		--knn $(graph_knn) --min_similarity $(min_sim) \
+		--resolution $(resolution) \
+		--samples_per_community $(samples_per) \
+		$(if $(target_k),--target_k $(target_k),) \
+		2>&1 | tee logs/$(data)_graphclust.log
+
+# usage: make run-graphclust-full data=massive_scenario target_k=18
+#        make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
+# Runs the entire pipeline end-to-end: Steps 1-3 + evaluation.
+run-graphclust-full:
+ifndef data
+	$(error data is required, e.g. make run-graphclust-full data=massive_scenario)
+endif
+	mkdir -p logs
+	$(BIN)tc-graphclust --data $(data) --full \
+		--knn $(graph_knn) --min_similarity $(min_sim) \
+		--resolution $(resolution) \
+		--samples_per_community $(samples_per) \
+		$(if $(target_k),--target_k $(target_k),) \
+		2>&1 | tee logs/$(data)_graphclust_full.log

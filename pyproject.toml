@@ -43,6 +43,7 @@ tc-sealclust      = "text_clustering.pipeline.sealclust_pipeline:main_cli"
 tc-visualize      = "text_clustering.visualization:main_cli"
 tc-hybrid         = "text_clustering.pipeline.hybrid_pipeline:main_cli"
 tc-baseline       = "text_clustering.pipeline.baseline_pipeline:main_cli"
+tc-graphclust     = "text_clustering.pipeline.graphclust_pipeline:main_cli"
 
 [project.optional-dependencies]
 dev = [
@@ -68,4 +69,4 @@ target-version = "py312"
 select = ["E", "F", "W", "I"]
 # Pipeline package: preserve original paper prompt strings (long lines, f-string style).
 # Root shims are clean and need no per-file suppressions.
-per-file-ignores = { "text_clustering/pipeline/label_generation.py" = ["E501", "F541"], "text_clustering/pipeline/classification.py" = ["E501", "F541"], "text_clustering/pipeline/evaluation.py" = ["E501", "E741"], "text_clustering/prompts.py" = ["E501", "F541"], "text_clustering/pipeline/hybrid_pipeline.py" = ["E501"], "text_clustering/pipeline/baseline_pipeline.py" = ["E501"] }
+per-file-ignores = { "text_clustering/pipeline/label_generation.py" = ["E501", "F541"], "text_clustering/pipeline/classification.py" = ["E501", "F541"], "text_clustering/pipeline/evaluation.py" = ["E501", "E741"], "text_clustering/prompts.py" = ["E501", "F541"], "text_clustering/pipeline/hybrid_pipeline.py" = ["E501"], "text_clustering/pipeline/baseline_pipeline.py" = ["E501"], "text_clustering/pipeline/graphclust_pipeline.py" = ["E501"], "text_clustering/graphclust.py" = ["E501"] }
