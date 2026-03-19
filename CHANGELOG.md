@@ -1,3 +1,25 @@
+## v1.6.0 (2026-03-19)
+
+### Feat
+
+- **labels**: rewritten the code so we using generated labels multiple times without calling llm each time if needed
+- **original**: adding an optimized version of running the original baseline with less llm calls
+- **graphclust**: propse LLM pairwise similarity graph clustering #7
+- **graphclust**: propse LLM pairwise similarity graph clustering
+- **graphclust**: propse LLM pairwise similarity graph clustering
+- adding baseline and hybrid approach v3 #6
+- **sealcust-v3**: we propose a new version of the hybrid approach v3 of sealclust and test it
+- **baseline**: creating baseline test with Kmeans and GMM
+
+### Fix
+
+- fixing the length of lines in files to pass lint
+- **checkpoint**: about checkpoint system to match all the pipelines
+- fixing kmedoids problem in sklearn extra #5
+- removing sklearn extra
+- **kmedoids**: modifying the pipeline to work with the new implementation
+- **kmedoid**: adding kmedoid implementation to fix the problem of sklearn extra
+
 ## v1.5.1 (2026-03-18)
 
 ### Fix

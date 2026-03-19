@@ -50,11 +50,14 @@ import time
 from text_clustering.data import load_dataset
 from text_clustering.llm import chat, ini_client
 from text_clustering.logging_config import setup_logging
-from text_clustering.prompts import prompt_construct_classify
+from text_clustering.prompts import (
+    prompt_construct_classify,
+    prompt_construct_classify_batch,
+)
 
 logger = logging.getLogger(__name__)
 
-CHECKPOINT_FILE = "checkpoint.json"
+CHECKPOINT_FILE = "checkpoint_classify.json"
 CLASSIFICATIONS_FILE = "classifications.json"
 
 
@@ -86,6 +89,10 @@ def get_merged_labels(run_dir: str) -> list[str]:
 def load_checkpoint(run_dir: str) -> tuple[int, dict] | tuple[None, None]:
     """Return (processed_count, answer_dict) from checkpoint, or (None, None) if none exists."""
     path = os.path.join(run_dir, CHECKPOINT_FILE)
+    # Backward compatibility: also check the old name
+    legacy_path = os.path.join(run_dir, "checkpoint.json")
+    if not os.path.exists(path) and os.path.exists(legacy_path):
+        path = legacy_path
     if not os.path.exists(path):
         return None, None
     with open(path, "r") as f:
@@ -124,6 +131,149 @@ def answer_process(response, label_list):
                 return candidate
 
     return label
+
+
+def _parse_batch_response(response: str, batch_size: int, label_list: list[str]) -> dict[int, str]:
+    """Parse a batched classification response into {index: label} mapping.
+
+    Expected format: {"1": "label_a", "2": "label_b", ...}
+
+    Returns a dict mapping 1-based indices to validated labels.
+    Missing or invalid entries are omitted so the caller can retry them individually.
+    """
+    results: dict[int, str] = {}
+    if response is None:
+        return results
+
+    try:
+        parsed = eval(response)  # noqa: S307
+    except Exception:
+        return results
+
+    if not isinstance(parsed, dict):
+        return results
+
+    for key, value in parsed.items():
+        try:
+            idx = int(key)
+        except (ValueError, TypeError):
+            continue
+        if idx < 1 or idx > batch_size:
+            continue
+
+        # Validate the label — exact match first, then substring fallback
+        if isinstance(value, str):
+            if value in label_list:
+                results[idx] = value
+            else:
+                # Try substring match (e.g. "Weather" matches "Weather Inquiries")
+                for candidate in label_list:
+                    if value.lower() in candidate.lower() or candidate.lower() in value.lower():
+                        results[idx] = candidate
+                        break
+
+    return results
+
+
+def known_label_categorize_batched(args, client, data_list, label_list, run_dir, batch_size: int = 10):
+    """Batched classification — sends multiple sentences per LLM call.
+
+    For each batch of ``batch_size`` sentences, constructs a single prompt
+    asking the LLM to classify all of them at once.  The response is parsed
+    as an indexed JSON object.  Any sentences that fail to parse are retried
+    individually as a fallback.
+
+    This reduces LLM calls from N to approximately N/batch_size + failures.
+
+    Parameters
+    ----------
+    batch_size : int
+        Number of sentences per LLM call (default: 10).
+    """
+    # Resume from checkpoint if available
+    start_from, answer = load_checkpoint(run_dir)
+    if answer is None:
+        answer = {"Unsuccessful": []}
+        for label in label_list:
+            answer[label] = []
+        start_from = 0
+
+    length = args.test_num if args.print_details else len(data_list)
+
+    # Checkpoint interval — batch-aligned
+    medoid_mode = getattr(args, "medoid_mode", False)
+    representative_mode = getattr(args, "representative_mode", False)
+    ckpt_interval = 1 if (medoid_mode or representative_mode) else max(batch_size * 10, 100)
+
+    llm_calls = 0
+    fallback_calls = 0
+
+    i = start_from
+    while i < length:
+        batch_end = min(i + batch_size, length)
+        batch_items = data_list[i:batch_end]
+        batch_sentences = [item["input"] for item in batch_items]
+        actual_batch_size = len(batch_sentences)
+
+        # --- Batched LLM call ---
+        prompt = prompt_construct_classify_batch(label_list, batch_sentences)
+        response = chat(prompt, client)
+        llm_calls += 1
+
+        # Parse batch response
+        batch_results = _parse_batch_response(response, actual_batch_size, label_list)
+
+        # Process results and identify failures for individual retry
+        failed_indices: list[int] = []  # 0-based within this batch
+
+        for j in range(actual_batch_size):
+            one_based = j + 1
+            if one_based in batch_results:
+                predicted = batch_results[one_based]
+                sentence = batch_sentences[j]
+                answer[predicted].append(sentence)
+            else:
+                failed_indices.append(j)
+
+        # --- Fallback: retry failed sentences individually ---
+        for j in failed_indices:
+            sentence = batch_sentences[j]
+            individual_prompt = prompt_construct_classify(label_list, sentence)
+            individual_response = chat(individual_prompt, client)
+            llm_calls += 1
+            fallback_calls += 1
+
+            if individual_response is None:
+                predicted = "Unsuccessful"
+            else:
+                predicted = answer_process(individual_response, label_list)
+
+            if predicted in label_list:
+                answer[predicted].append(sentence)
+            else:
+                answer["Unsuccessful"].append(sentence)
+
+        if args.print_details:
+            print(f"--- Batch {i // batch_size + 1} (samples {i + 1}–{batch_end}) ---")
+            print(f"  Parsed: {len(batch_results)}/{actual_batch_size}")
+            print(f"  Failed: {len(failed_indices)} (retried individually)")
+
+        # Advance pointer
+        i = batch_end
+
+        # Checkpoint
+        if (i - start_from) % ckpt_interval == 0 or i >= length:
+            logger.info("Progress: %d/%d  (LLM calls: %d, fallbacks: %d)", i, length, llm_calls, fallback_calls)
+            save_checkpoint(run_dir, i, answer)
+            write_classifications(run_dir, answer)
+
+    logger.info(
+        "Batched classification complete — %d LLM calls total "
+        "(%d batched + %d individual fallbacks) for %d documents",
+        llm_calls, llm_calls - fallback_calls, fallback_calls, length,
+    )
+
+    return answer
 
 
 def known_label_categorize(args, client, data_list, label_list, run_dir):
@@ -207,7 +357,18 @@ def main(args):
     logger.info("Labels to classify into: %d", len(label_list))
     logger.info("Documents to classify  : %d", len(data_list))
 
-    answer = known_label_categorize(args, client, data_list, label_list, args.run_dir)
+    batch_size = getattr(args, "batch_size", 1)
+    if batch_size > 1:
+        logger.info("Classification mode    : BATCHED (batch_size=%d)", batch_size)
+        logger.info("Expected LLM calls    : ~%d (vs %d unbatched)",
+                     (len(data_list) + batch_size - 1) // batch_size, len(data_list))
+        answer = known_label_categorize_batched(
+            args, client, data_list, label_list, args.run_dir,
+            batch_size=batch_size,
+        )
+    else:
+        logger.info("Classification mode    : INDIVIDUAL (1 sentence per call)")
+        answer = known_label_categorize(args, client, data_list, label_list, args.run_dir)
     answer = {k: v for k, v in answer.items() if v}  # drop empty buckets
     write_classifications(args.run_dir, answer)
 
@@ -245,6 +406,14 @@ def build_parser():
         help=(
             "Classify only the GMM representative documents (from representative_documents.jsonl) "
             "instead of the full dataset. Used with the GMM pre-clustering step."
+        ),
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=1,
+        help=(
+            "Number of sentences to classify per LLM call (default: 1 = original behaviour). "
+            "Set to 10-20 for batched classification which reduces LLM calls by that factor. "
+            "Failed batch parses are retried individually as fallback."
         ),
     )
     # --api_key kept for backward compatibility but ignored; key comes from .env
