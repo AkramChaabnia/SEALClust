@@ -235,20 +235,22 @@ The paper's method. Most expensive but highest quality with strong models.
 
 ```bash
 # Step 0: Seed labels (run once)
-conda run -n ppd tc-seed-labels
+tc-seed-labels
 
 # Step 1: Label generation (~200 LLM calls)
-conda run -n ppd tc-label-gen --data massive_scenario
+tc-label-gen --data massive_scenario
 # ⚠️ COPY THE PRINTED RUN DIR
+# or if you have the selected number k
+tc-label-gen --data massive_scenario --target_k 18
 
 # Step 2: Classification (~2,974 LLM calls — one per document)
-conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
 
 # Step 2 (optimised): Batched classification (~298 LLM calls with batch_size=10)
-conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --batch_size 10
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --batch_size 10
 
 # Step 3: Evaluation
-conda run -n ppd tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
+tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 ```
 
 **Cost**: ~3,000 LLM calls (unbatched) or ~500 (batched, `--batch_size 10`) · **Time**: 1–3h (unbatched) or ~20min (batched)
