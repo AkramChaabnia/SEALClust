@@ -1,0 +1,138 @@
+{
+  "dataset_name": "clinc_domain",
+  "splits": {
+    "small": {
+      "n_samples": 4500,
+      "n_labels": 10,
+      "labels": [
+        "auto_and_commute",
+        "banking",
+        "credit_cards",
+        "home",
+        "kitchen_and_dining",
+        "meta",
+        "small_talk",
+        "travel",
+        "utility",
+        "work"
+      ],
+      "label_counts": {
+        "auto_and_commute": 450,
+        "banking": 450,
+        "credit_cards": 450,
+        "home": 450,
+        "kitchen_and_dining": 450,
+        "meta": 450,
+        "small_talk": 450,
+        "travel": 450,
+        "utility": 450,
+        "work": 450
+      },
+      "label_pct": {
+        "auto_and_commute": 10.0,
+        "banking": 10.0,
+        "credit_cards": 10.0,
+        "home": 10.0,
+        "kitchen_and_dining": 10.0,
+        "meta": 10.0,
+        "small_talk": 10.0,
+        "travel": 10.0,
+        "utility": 10.0,
+        "work": 10.0
+      },
+      "text_length": {
+        "min": 2,
+        "max": 125,
+        "mean": 39.3,
+        "median": 37.0,
+        "stdev": 15.8,
+        "total_chars": 176890
+      },
+      "imbalance": {
+        "ratio_max_min": 1.0,
+        "entropy_bits": 3.3219,
+        "max_entropy_bits": 3.3219,
+        "gini_impurity": 0.9,
+        "avg_samples_per_label": 450.0,
+        "largest_class": "auto_and_commute",
+        "largest_class_count": 450,
+        "smallest_class": "work",
+        "smallest_class_count": 450,
+        "warnings": []
+      }
+    },
+    "large": {
+      "n_samples": 15000,
+      "n_labels": 10,
+      "labels": [
+        "auto_and_commute",
+        "banking",
+        "credit_cards",
+        "home",
+        "kitchen_and_dining",
+        "meta",
+        "small_talk",
+        "travel",
+        "utility",
+        "work"
+      ],
+      "label_counts": {
+        "auto_and_commute": 1500,
+        "banking": 1500,
+        "credit_cards": 1500,
+        "home": 1500,
+        "kitchen_and_dining": 1500,
+        "meta": 1500,
+        "small_talk": 1500,
+        "travel": 1500,
+        "utility": 1500,
+        "work": 1500
+      },
+      "label_pct": {
+        "auto_and_commute": 10.0,
+        "banking": 10.0,
+        "credit_cards": 10.0,
+        "home": 10.0,
+        "kitchen_and_dining": 10.0,
+        "meta": 10.0,
+        "small_talk": 10.0,
+        "travel": 10.0,
+        "utility": 10.0,
+        "work": 10.0
+      },
+      "text_length": {
+        "min": 2,
+        "max": 136,
+        "mean": 39.9,
+        "median": 38.0,
+        "stdev": 15.3,
+        "total_chars": 598591
+      },
+      "imbalance": {
+        "ratio_max_min": 1.0,
+        "entropy_bits": 3.3219,
+        "max_entropy_bits": 3.3219,
+        "gini_impurity": 0.9,
+        "avg_samples_per_label": 1500.0,
+        "largest_class": "auto_and_commute",
+        "largest_class_count": 1500,
+        "smallest_class": "work",
+        "smallest_class_count": 1500,
+        "warnings": []
+      }
+    }
+  },
+  "summary": {
+    "dataset_name": "clinc_domain",
+    "total_samples": 19500,
+    "small_samples": 4500,
+    "large_samples": 15000,
+    "size_ratio_large_to_small": 3.33,
+    "small_n_labels": 10,
+    "large_n_labels": 10,
+    "labels_shared": 10,
+    "labels_only_in_small": null,
+    "labels_only_in_large": null,
+    "label_sets_identical": true
+  }
+}

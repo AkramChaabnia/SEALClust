@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate run-hybrid run-hybrid-full run-baseline-kmeans run-baseline-gmm run-graphclust run-graphclust-full run-sealclust-v3 run-sealclust-v3-full run-sealclust-v3-classify run-sealclust-v3-propagate
+.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate run-hybrid run-hybrid-full run-baseline-kmeans run-baseline-gmm run-graphclust run-graphclust-full run-sealclust-v3 run-sealclust-v3-full run-sealclust-v3-classify run-sealclust-v3-propagate analyze-datasets
 
 # ── Environment auto-detection ──────────────────────────────────────────
 # Priority: $(CONDA_PREFIX)/bin/ (if active) → .venv/bin/ → bare (system PATH)
@@ -130,6 +130,10 @@ help:
 	@echo "    make run-sealclust-v3-full data=massive_scenario v3_reduction=pca v3_pca_dims=50"
 	@echo "    make run-sealclust-v3-full data=massive_scenario label_source=representatives"
 	@echo "    make run-sealclust-v3 data=massive_scenario kstar=18"
+	@echo ""
+	@echo "  ── Dataset Analysis ──"
+	@echo "  analyze-datasets                   Profile all datasets → assets/*.json"
+	@echo "  analyze-datasets data=<d>          Profile a single dataset"
 	@echo ""
 
 setup:
@@ -507,3 +511,9 @@ ifndef run
 	$(error run is required, e.g. run=./runs/massive_scenario_small_v3_20260323_...)
 endif
 	$(BIN)tc-sealclust-v3 --data $(data) --run_dir $(run) --propagate
+
+# ── Dataset Analysis ─────────────────────────────────────────────────────
+# usage: make analyze-datasets
+#        make analyze-datasets data=arxiv_fine     # single dataset
+analyze-datasets:
+	$(BIN)tc-analyze-datasets $(if $(data),--dataset $(data),)

@@ -45,6 +45,7 @@ tc-visualize      = "text_clustering.visualization:main_cli"
 tc-hybrid         = "text_clustering.pipeline.hybrid_pipeline:main_cli"
 tc-baseline       = "text_clustering.pipeline.baseline_pipeline:main_cli"
 tc-graphclust     = "text_clustering.pipeline.graphclust_pipeline:main_cli"
+tc-analyze-datasets = "text_clustering.dataset_analysis:main_cli"
 
 [project.optional-dependencies]
 dev = [

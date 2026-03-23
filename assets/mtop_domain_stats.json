@@ -1,0 +1,144 @@
+{
+  "dataset_name": "mtop_domain",
+  "splits": {
+    "small": {
+      "n_samples": 4386,
+      "n_labels": 11,
+      "labels": [
+        "alarm",
+        "calling",
+        "event",
+        "messaging",
+        "music",
+        "news",
+        "people",
+        "recipes",
+        "reminder",
+        "timer",
+        "weather"
+      ],
+      "label_counts": {
+        "calling": 613,
+        "reminder": 613,
+        "weather": 487,
+        "alarm": 418,
+        "music": 369,
+        "news": 358,
+        "people": 354,
+        "recipes": 346,
+        "messaging": 341,
+        "timer": 290,
+        "event": 197
+      },
+      "label_pct": {
+        "calling": 13.98,
+        "reminder": 13.98,
+        "weather": 11.1,
+        "alarm": 9.53,
+        "music": 8.41,
+        "news": 8.16,
+        "people": 8.07,
+        "recipes": 7.89,
+        "messaging": 7.77,
+        "timer": 6.61,
+        "event": 4.49
+      },
+      "text_length": {
+        "min": 3,
+        "max": 132,
+        "mean": 36.8,
+        "median": 34.0,
+        "stdev": 15.1,
+        "total_chars": 161376
+      },
+      "imbalance": {
+        "ratio_max_min": 3.11,
+        "entropy_bits": 3.3932,
+        "max_entropy_bits": 3.4594,
+        "gini_impurity": 0.9006,
+        "avg_samples_per_label": 398.7,
+        "largest_class": "calling",
+        "largest_class_count": 613,
+        "smallest_class": "event",
+        "smallest_class_count": 197,
+        "warnings": []
+      }
+    },
+    "large": {
+      "n_samples": 15667,
+      "n_labels": 11,
+      "labels": [
+        "alarm",
+        "calling",
+        "event",
+        "messaging",
+        "music",
+        "news",
+        "people",
+        "recipes",
+        "reminder",
+        "timer",
+        "weather"
+      ],
+      "label_counts": {
+        "calling": 2187,
+        "reminder": 2157,
+        "weather": 1657,
+        "alarm": 1402,
+        "music": 1353,
+        "recipes": 1303,
+        "people": 1231,
+        "news": 1219,
+        "messaging": 1165,
+        "timer": 1064,
+        "event": 929
+      },
+      "label_pct": {
+        "calling": 13.96,
+        "reminder": 13.77,
+        "weather": 10.58,
+        "alarm": 8.95,
+        "music": 8.64,
+        "recipes": 8.32,
+        "people": 7.86,
+        "news": 7.78,
+        "messaging": 7.44,
+        "timer": 6.79,
+        "event": 5.93
+      },
+      "text_length": {
+        "min": 4,
+        "max": 148,
+        "mean": 36.6,
+        "median": 34,
+        "stdev": 15.3,
+        "total_chars": 572977
+      },
+      "imbalance": {
+        "ratio_max_min": 2.35,
+        "entropy_bits": 3.4073,
+        "max_entropy_bits": 3.4594,
+        "gini_impurity": 0.9021,
+        "avg_samples_per_label": 1424.3,
+        "largest_class": "calling",
+        "largest_class_count": 2187,
+        "smallest_class": "event",
+        "smallest_class_count": 929,
+        "warnings": []
+      }
+    }
+  },
+  "summary": {
+    "dataset_name": "mtop_domain",
+    "total_samples": 20053,
+    "small_samples": 4386,
+    "large_samples": 15667,
+    "size_ratio_large_to_small": 3.57,
+    "small_n_labels": 11,
+    "large_n_labels": 11,
+    "labels_shared": 11,
+    "labels_only_in_small": null,
+    "labels_only_in_large": null,
+    "label_sets_identical": true
+  }
+}
