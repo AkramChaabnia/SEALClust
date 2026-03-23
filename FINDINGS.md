@@ -1,879 +1,613 @@
-# Research Log — Text Clustering as Classification with LLMs
+# Findings — Text Clustering as Classification with LLMs
+
 > **Project**: PPD — Text Clustering as Classification with LLMs  
 > **Programme**: M2 MLSD, Université Paris Cité  
 > **Period**: 2026-02-18 → ongoing  
-> **Goal**: Reproduce the baseline results from [arXiv:2410.00927](https://arxiv.org/abs/2410.00927) using free LLMs via OpenRouter, then run complementary experiments.
+> **Reference paper**: [arXiv:2410.00927](https://arxiv.org/abs/2410.00927) — Huang & He, 2024
 
 ---
 
 ## Table of Contents
 
-1. [Paper Overview](#1-paper-overview)
-2. [Setup](#2-setup)
-3. [Dataset](#3-dataset)
-4. [Code Changes](#4-code-changes)
-5. [API & Model Investigation](#5-api--model-investigation)
-6. [Model Probe Results](#6-model-probe-results)
-7. [Pipeline Execution Log](#7-pipeline-execution-log)
-   - [Run 01 — massive_scenario · trinity-large-preview · 2026-02-20](#run-01--massive_scenario--arcee-aitrinity-large-previewfree--2026-02-20)
-   - [Run 02 — Merge Investigation & Model Switch](#run-02--merge-investigation--model-switch)
-   - [Run 02 — `massive_scenario` · gemini-2.0-flash-001 · `target_k=18` · 2026-02-21](#run-02--massive_scenario--googlegemini-20-flash-001--target_k18--2026-02-21)
-   - [Run 03 — `massive_scenario` · gemini-2.0-flash-001 · no `target_k` · 2026-02-21](#run-03--massive_scenario--googlegemini-20-flash-001--no-target_k--2026-02-21)
-8. [Results](#8-results)
-9. [Next Steps](#9-next-steps)
+1. [Executive Summary](#1-executive-summary)
+2. [Experimental Setup](#2-experimental-setup)
+3. [Pipeline Versions](#3-pipeline-versions)
+4. [Results by Dataset](#4-results-by-dataset)
+   - [massive_scenario](#41-massive_scenario)
+   - [massive_intent](#42-massive_intent)
+   - [mtop_intent](#43-mtop_intent)
+   - [arxiv_fine](#44-arxiv_fine)
+   - [go_emotion](#45-go_emotion)
+5. [Cross-Dataset Summary](#5-cross-dataset-summary)
+6. [Analysis & Insights](#6-analysis--insights)
+   - [SEAL-Clust v3: Cluster Method Comparison](#61-seal-clust-v3-cluster-method-comparison)
+   - [SEAL-Clust v3: Label Source Analysis](#62-seal-clust-v3-label-source-analysis)
+   - [SEAL-Clust v3: k₀ Sensitivity Analysis](#63-seal-clust-v3-k₀-sensitivity-analysis)
+   - [SEAL-Clust v3: Reduction Analysis](#64-seal-clust-v3-reduction-analysis)
+   - [GMM/KMeans Ordering Bug Impact](#65-gmmkmeans-ordering-bug-impact)
+   - [Consolidation Accuracy](#66-consolidation-accuracy)
+7. [Known Issues & Limitations](#7-known-issues--limitations)
+8. [Conclusions & Recommendations](#8-conclusions--recommendations)
 
 ---
 
-## 1. Paper Overview
+## 1. Executive Summary
 
-**Title**: Text Clustering as Classification with LLMs  
-**Authors**: Chen Huang, Guoxiu He  
-**Venue**: arXiv 2024 — [2410.00927](https://arxiv.org/abs/2410.00927)  
-**Original repo**: [ECNU-Text-Computing/Text-Clustering-via-LLM](https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM)
+This document presents a comprehensive analysis of **100+ experiment runs** across 5 datasets, comparing multiple pipeline variants for the "Text Clustering as Classification" paradigm introduced in the reference paper. The pipelines tested include:
 
-### Core idea
+- **SEAL-Clust v2** (LLM-based label generation → LLM-based classification)
+- **SEAL-Clust v2 (batched)** (multi-pass merge strategy)
+- **SEAL-Clust v3** (embedding-based clustering → LLM label discovery → LLM classification)
+- **Baseline KMeans** (embedding + KMeans, no LLM)
+- **Baseline GMM** (embedding + GMM, no LLM)
+- **GraphClust** (incomplete)
 
-The paper reframes unsupervised text clustering as a **classification problem** driven by an LLM. Instead of embeddings + k-means, the approach is:
+**Key findings**:
 
-1. **Label generation** — given a small set of seed labels (20% of ground truth), the LLM proposes new label names by reading chunks of input texts. Duplicate/similar labels are merged in a second LLM call.
-2. **Classification** — the LLM assigns each text to one of the generated labels, one text at a time.
-3. **Evaluation** — standard clustering metrics: ACC (Hungarian alignment), NMI, ARI.
-
-### Pipeline — step by step
-
-**Step 0 — Seed label selection**  
-Before running the LLM, 20% of the ground-truth labels are randomly sampled per dataset and written to `chosen_labels.json`. These seeds are handed to the LLM in Step 1 as a starting point, which anchors the taxonomy and avoids completely free-form generation.
-
-**Step 1 — Label generation**  
-The dataset is shuffled and split into chunks of 15 texts. For each chunk, the LLM is shown the current label set and asked: *"Do any of these texts require a new label that doesn't already exist?"* It adds new candidate labels when needed. Once all chunks are processed, a second LLM call merges and deduplicates near-synonyms (e.g. `"email"` and `"email_management"` collapse into one). The result is the final label set used in Step 2.
-
-**Step 2 — Classification**  
-Each text is sent individually to the LLM with the full label list: *"Which of these labels fits this text best?"* The predicted label is accumulated into a dict `{ label: [text, text, ...] }` and saved as `classifications.json`. This step makes one API call per sample — ~3,000 calls for most datasets. Progress is checkpointed every 200 samples so interrupted runs can resume without starting over.
-
-**Step 3 — Evaluation**  
-Predicted labels are matched to ground-truth labels using the Hungarian algorithm (optimal one-to-one alignment), then ACC, NMI and ARI are computed. Results are printed and saved to `results.json`.
-
-### Pipeline diagram
-
-```
-dataset/
-  └── small.jsonl  (texts + ground-truth labels)
-          │
-          ▼
-  [Step 0]  seed_labels.py
-          │  picks 20% of true labels at random
-          ▼
-  runs/chosen_labels.json
-          │
-          ▼
-  [Step 1]  label_generation.py  --data <dataset>
-          │  chunks of 15 texts → LLM proposes labels → merge call
-          ▼
-  runs/<dataset>_small_<timestamp>/
-    labels_true.json        (ground-truth label list)
-    labels_proposed.json    (before merge)
-    labels_merged.json      (final label set)
-          │
-          ▼
-  [Step 2]  classification.py  --run_dir <above>
-          │  one LLM call per text → assigns a label
-          ▼
-    classifications.json    { label: [text, ...] }
-          │
-          ▼
-  [Step 3]  evaluation.py  --run_dir <above>
-          │  Hungarian alignment → ACC / NMI / ARI
-          ▼
-    results.json
-```
-
-### Models used in the paper
-
-| Stage | Model |
-|-------|-------|
-| Label generation | `gpt-3.5-turbo-0125` |
-| Label merging | `gpt-3.5-turbo-0125` |
-| Classification | `gpt-3.5-turbo-0125` |
-| Ablation upper bound (`LLM_known_labels`) | `gpt-3.5-turbo-0125` (same model, true labels given) |
-
-### Datasets (5 main, small split)
-
-| Dataset | Domain | Classes |
-|---------|--------|---------|
-| `massive_intent` | Voice assistant intents | 59 |
-| `massive_scenario` | Voice assistant scenarios | 18 |
-| `go_emotion` | Emotion detection | 27 |
-| `mtop_intent` | Multi-domain intent | 102 |
-| `arxiv_fine` | Academic topics | 93 |
-
----
-
-## 2. Setup
-
-### Toolchain
-
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Python | 3.12.6 (pyenv) | Runtime |
-| uv | latest | Fast, reproducible package installs |
-| Ruff | 0.15.1 | Linter |
-| Commitizen | 4.13.7 | Conventional commit enforcement |
-
-### Key files added
-
-| File | Purpose |
-|------|---------|
-| `pyproject.toml` | Project metadata and dependencies |
-| `uv.lock` | Pinned lockfile for reproducibility |
-| `requirements.txt` | Pinned fallback for pip users |
-| `.env.example` | Documents every env variable (no secrets) |
-| `text_clustering/client.py` | Thin wrapper: loads `.env`, builds `openai.OpenAI` client for OpenRouter |
-| `.cz.yaml` | Commitizen config (conventional commits) |
-| `.github/workflows/ci.yml` | Lint CI on PRs to `main` / `develop` |
-
-### Dependencies
-
-```
-openai>=1.30.0        — OpenRouter-compatible client
-python-dotenv>=1.0.0  — .env loading
-scikit-learn>=1.4.0   — NMI, ARI metrics
-scipy>=1.13.0         — Hungarian algorithm (ACC)
-numpy>=1.26.0         — used in evaluate.py
-```
-
-### Branching
-
-```
-main       ← stable, tagged releases
-  └── develop         ← integration branch
-        └── feature/<desc>  /  fix/<desc>  /  docs/<desc>
-```
-
-All commits follow [Conventional Commits](https://www.conventionalcommits.org/) :  (`feat:`, `fix:`, `docs:`, `build:`, `ci:`).
-
----
-
-## 3. Dataset
-
-**Source**: Downloaded directly from [Google Drive — ClusterLLM dataset, originally from EMNLP 2023](https://drive.google.com/file/d/1TBq3vkfm3OZLi90GVH-PVNKi3fk1Vba7/view) — unzip into `./dataset/`
-
-**Format** (one JSON object per line):
-```json
-{"task": "massive_intent", "input": "set an alarm for 7am", "label": "alarm set"}
-```
-
-The download bundle contains 14 datasets. The 9 extras (`banking77`, `clinc`, `clinc_domain`, `few_event`, `few_nerd_nat`, `few_rel_nat`, `mtop_domain`, `reddit`, `stackexchange`) could be removed — only the 5 used in the paper are kept in `./dataset/`.
-
-### Dataset sizes (small split)
-
-| Dataset | Samples | Classes |
-|---------|---------|---------|
-| `massive_scenario` | 2,974 | 18 |
-| `massive_intent` | 2,974 | 59 |
-| `go_emotion` | 5,940 | 27 |
-| `arxiv_fine` | 3,674 | 93 |
-| `mtop_intent` | 4,386 | 102 |
-
-### Seed label selection (Step 0)
-
-`select_part_labels.py` samples `floor(0.2 × num_classes)` labels per dataset at random to use as the LLM's starting point.
-
-| Dataset | Classes | Seed labels given |
-|---------|---------|-------------------|
-| `massive_scenario` | 18 | 3 |
-| `massive_intent` | 59 | 11 |
-| `go_emotion` | 27 | 5 |
-| `mtop_intent` | 102 | 20 |
-| `arxiv_fine` | 93 | 18 |
-
-Output: `./runs/chosen_labels.json`
-
----
-
-## 4. Code Changes
-
-The original code was written to run against OpenAI directly with a paid key. Adapting it to free models via OpenRouter exposed several bugs and missing pieces. This section documents what was broken (fixes) and what was added on top (improvements).
-
----
-
-### Fixes
-
-These are things that were broken in the original and prevented the pipeline from running correctly.
-
-#### Fix 1 — `ini_client()` call signature
-
-**File**: `text_clustering/pipeline/classification.py`  
-**Issue**: `main()` called `ini_client(args.api_key)` but `ini_client()` took no arguments → `TypeError` on every run.
-
-```python
-# Before
-client = ini_client(args.api_key)
-
-# After
-client = ini_client()  # API key comes from .env
-```
-
-#### Fix 2 — `response_format` not universally supported
-
-**Files**: `text_clustering/pipeline/label_generation.py`, `classification.py`  
-**Issue**: The original code always sent `response_format={"type":"json_object"}`. Many free models return HTTP 400 or an empty body when this is set.  
-**Fix**: Made it opt-in via `LLM_FORCE_JSON_MODE` env var (default `false`).
-
-```python
-_FORCE_JSON_MODE = os.getenv("LLM_FORCE_JSON_MODE", "false").lower() == "true"
-
-if _FORCE_JSON_MODE:
-    kwargs["response_format"] = {"type": "json_object"}
-```
-
-#### Fix 3 — Markdown fence stripping
-
-**Files**: `text_clustering/pipeline/label_generation.py`, `classification.py`  
-**Issue**: Free models often wrap JSON in markdown code fences (` ```json ... ``` `). The original `eval()` call fails on these, silently dropping labels.  
-**Fix**: Added `_strip_fenced_json()` applied after every API call.
-
-```python
-def _strip_fenced_json(text: str) -> str:
-    text = text.strip()
-    match = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return text
-```
-
-#### Fix 4 — No retry on rate limits
-
-**File**: `text_clustering/llm.py`  
-**Issue**: No error handling around API calls. A single 429 silently returned `None`, losing an entire chunk of labels with no indication.  
-**Fix**: 5-attempt retry with linear backoff (20s, 40s, 60s, 80s).
-
-```python
-for attempt in range(5):
-    try:
-        completion = client.chat.completions.create(**kwargs)
-        ...
-        return response_origin
-    except Exception as e:
-        if "429" in str(e) and attempt < 4:
-            wait = 20 * (attempt + 1)
-            print(f"  [rate limit] attempt {attempt+1}/5, waiting {wait}s...")
-            time.sleep(wait)
-        else:
-            return None
-```
-
-#### Fix 5 — Hardcoded model name
-
-**File**: `text_clustering/config.py`  
-**Issue**: `"gpt-3.5-turbo-0125"` was hardcoded in every script, making model switching require code edits.  
-**Fix**: Read from `LLM_MODEL` env var.
-
-```python
-MODEL = os.getenv("LLM_MODEL", "gpt-3.5-turbo-0125")
-```
-
-#### Fix 6 — Missing `.env` loading
-
-**File**: `text_clustering/client.py`  
-**Issue**: `load_dotenv()` was never called, so the `.env` file was silently ignored and all env vars fell back to their defaults.  
-**Fix**: `load_dotenv()` called at import time in `client.py`.
-
-#### Fix 7 — `LLM_REQUEST_DELAY` not consumed
-
-**File**: `text_clustering/llm.py`  
-**Issue**: `.env` defines `LLM_REQUEST_DELAY=4` but no script read it. Without a delay, requests fire back-to-back and immediately hit the 20 req/min ceiling.  
-**Fix**: Sleep after each successful API call.
-
-```python
-_REQUEST_DELAY = float(os.getenv("LLM_REQUEST_DELAY", "0"))
-
-# after a successful completion:
-if _REQUEST_DELAY > 0:
-    time.sleep(_REQUEST_DELAY)
-```
-
-With `LLM_REQUEST_DELAY=4` the pipeline stays at ~15 req/min, safely under the OpenRouter limit.
-
----
-
-### Improvements
-
-These are additions that go beyond the original scope — the pipeline worked without them, but they make it more practical for long or repeated runs.
-
-#### Improvement 1 — Package restructuring
-
-The original code was 4 flat scripts with duplicated helpers (`ini_client`, `chat`, prompt builders) copy-pasted across files. All shared logic was moved into a proper `text_clustering/` package:
-
-- `client.py` — API client factory
-- `config.py` — single source of truth for all env vars
-- `llm.py` — `chat()` with retry, `_strip_fenced_json()`
-- `data.py` — dataset loading
-- `prompts.py` — prompt construction
-- `pipeline/` — the 4 pipeline steps as importable modules with console-script entry points
-
-#### Improvement 2 — Timestamped run directories
-
-The original wrote all outputs to a flat `generated_labels/` folder with fixed filenames, so re-running a dataset overwrote previous results.
-
-Each Step 1 run now creates an isolated folder: `runs/<dataset>_<split>_<YYYYMMDD_HHMMSS>/`. All subsequent steps read from and write to that folder. Previous runs are never touched.
-
-#### Improvement 3 — Checkpoint / resume (Step 2)
-
-Step 2 makes one API call per text (~3,000 per dataset, ~3h20). The original had no way to recover from an interruption — a crash meant starting from scratch.
-
-Progress is now saved to `checkpoint.json` every 200 samples. Re-running the same command detects the checkpoint and resumes from where it stopped. The checkpoint is deleted automatically on successful completion.
-
-#### Improvement 4 — `results.json`
-
-The original `evaluate.py` printed metrics to stdout only. Results are now also written to `results.json` in the run directory, including ACC, NMI, ARI, sample count, cluster counts, model name, and timestamp.
-
-#### Improvement 5 — Logging
-
-All `print()` calls in the pipeline were replaced with Python's standard `logging` module. A `setup_logging(log_path)` function configures two handlers at startup: one to stdout (INFO level) and one to a `run.log` file inside the run directory (DEBUG level). The log format includes a timestamp, level, and module name:
-
-```
-2026-02-20 14:32:01 | INFO     | label_generation | Run dir: ./runs/...
-```
-
-Every pipeline step writes its full trace to `run.log` in its run directory. Step 0 writes to `runs/seed_labels.log`. This means a run can always be reconstructed after the fact — which model was used, when each step ran, any rate limit retries, and progress checkpoints.
-
-
-
----
-
-## 5. API & Model Investigation
-
-### OpenRouter rate limits
-
-OpenRouter has two distinct concepts:
-
-| Concept | Detail |
+| Finding | Detail |
 |---------|--------|
-| **Account balance** | Must be non-negative to use free models (even $0/token ones) |
-| **Key limit** | Per-key spending cap. If set to `0`, blocks all requests including free ones |
-| **Free tier cap** | `is_free_tier: true` → 50 req/day. Purchasing ≥ $10 raises it to 1,000/day |
-| **RPM** | 20 req/min for free models regardless of tier |
-
-After adding €10 of credits the key changed to `is_free_tier: false`, `limit: null` — no daily cap, governed only by credit balance.
-
-**Important**: The popular free models (Llama 70B, Mistral 24B, Gemma 27B) are all routed through a single upstream provider called **Venice**. When Venice is under load, all of these fail simultaneously with a 429 even if your account has plenty of credits. This is an infrastructure issue on their side, not an account issue.
-
-### Why we don't use OpenAI JSON mode
-
-`response_format={"type": "json_object"}` — what the original code uses — is not supported by most free models. The options are:
-
-- Some return HTTP 400 (Google AI Studio, older models)
-- Some return an empty body (Solar Pro 3, Step Flash)
-- Reasoning models spend all `max_tokens` on internal chain-of-thought and return `content: ""`
-
-Our fix: leave JSON mode off by default and strip fences from responses instead. Works reliably across all tested models.
-
-### Why reasoning models are excluded
-
-Models like DeepSeek R1, Solar Pro 3, GLM 4.5 Air, and Qwen3-thinking variants use an internal chain-of-thought before producing a final answer. On OpenRouter, this CoT appears in `message.reasoning` while the actual answer goes in `message.content`. The problem:
-
-- At `max_tokens=512` (pipeline default), they spend the entire budget on CoT and return `content: ""`
-- Even with a larger budget, they are slow and token-heavy — incompatible with ~3,000 calls per dataset
-
-### Model selection criteria
-
-1. Instruct model (not reasoning/thinking)
-2. ≥ 24B parameters — needed for reliable label proposal and 59-class classification
-3. ≥ 32K context — classification prompt lists up to 60 candidate labels
-4. Responds without a system prompt being required
-5. Returns JSON without wrapping it in extra explanation
-
-### Merge capability requirement
-
-An additional hard requirement emerged during Run 02 (see §7): the model must be able to
-consolidate ~150 proposed labels down to ~18 in a **single call**. This is what GPT-3.5-turbo
-does in the paper. It cannot be compensated for with batching or multi-pass strategies — those
-approaches either stall (trinity-large-preview) or produce data leakage (map-to-canonical). See
-§7 — Run 02 for the full investigation.
-
-This requirement disqualifies `arcee-ai/trinity-large-preview:free` as the primary model,
-despite it passing all 6 probe tests.
-
-### Primary model: `google/gemini-2.0-flash-001`
-
-Selected after the Run 02 merge investigation. Probe: 6/6 RECOMMENDED (2026-02-21). Merge test:
-167 labels → **28 in 1.9 seconds** — single call, paper-aligned.
-
-**Cost estimate — full 5-dataset baseline**  
-Pricing: $0.10/M input tokens · $0.40/M output tokens
-
-| Dataset | Estimated cost |
-|---------|---------------|
-| `massive_scenario` | ~$0.14 |
-| `massive_intent` | ~$0.11 |
-| `go_emotion` | ~$0.29 |
-| `arxiv_fine` | ~$0.27 |
-| `mtop_intent` | ~$0.11 |
-| **Total (5 datasets)** | **~$0.92** |
-
-With 2× safety margin for retries / rate limit backoff: **~$1.83**. $10 budget → **~$8.17 remaining** after full baseline.
-
-**Note on availability**: OpenRouter lists `gemini-2.0-flash-001` as going away March 31, 2026.
-If the model is retired before the full baseline is complete, re-run `probe_models.py` on the
-successor (`google/gemini-2.0-flash-lite` or `google/gemini-2.5-flash-preview`) and update
-`LLM_MODEL` in `.env`.
+| **Best overall method varies by dataset** | No single pipeline dominates across all 5 datasets |
+| **LLM methods shine on high-k intent datasets** | On `mtop_intent` (102 classes), SEAL-Clust v3 achieves ACC=0.594 vs KMeans=0.330 — a **+80%** improvement |
+| **Baselines dominate on arxiv_fine** | KMeans ACC=0.319 vs best LLM ACC=0.219 — LLM methods struggle with 93 fine-grained academic categories |
+| **go_emotion is universally hard** | All methods below ACC=0.32; the dataset has high label ambiguity |
+| **GMM/KMeans ordering bug caused 3× accuracy drop** | Pre-fix v3 GMM: ACC=0.16; post-fix: ACC=0.51 |
+| **SEAL-Clust v2 best run**: ACC=0.680 on `massive_scenario` | Closest to paper baseline (0.718) |
 
 ---
 
-## 6. Model Probe Results
-
-All models tested with `probe_models.py` (6 tests each: reachability, label gen, merge,
-classification, consistency, token efficiency). Account status: `is_free_tier: false`,
-`limit: null`.
-
-### Probe summary
-
-| Model | Date | Score | Verdict | Notes |
-|-------|------|-------|---------|-------|
-| `arcee-ai/trinity-large-preview:free` | 2026-02-20 | **6/6** | ✅ PASS | All tests pass — but merge capability insufficient (see §7 Run 02). |
-| `google/gemini-2.0-flash-001` | 2026-02-21 | **6/6** | ✅ **PRIMARY** | 6/6 + merge test: 167 → 28 labels in 1.9s. |
-| `openai/gpt-4o-mini` | 2026-02-21 | 6/6 | ⚠️ USABLE | 6/6 probe but merge test: 167 → 105 (poor consolidation). |
-| `meta-llama/llama-3.3-70b-instruct:free` | 2026-02-20 | —/— | ⏳ Pending | Venice upstream 429. Retry when congestion clears. |
-| `nousresearch/hermes-3-llama-3.1-405b:free` | 2026-02-20 | —/— | ⏳ Pending | Venice upstream 429. |
-| `mistralai/mistral-small-3.1-24b-instruct:free` | 2026-02-20 | —/— | ⏳ Pending | Venice upstream 429. |
-| `google/gemma-3-27b-it:free` | 2026-02-21 | —/— | ⏳ Pending | Venice upstream 429. |
-| `cognitivecomputations/dolphin-mistral-24b-venice-edition:free` | 2026-02-20 | —/— | ⏳ Pending | Venice upstream 429. |
-| `google/gemma-3-12b-it:free` | 2026-02-20 | 0/1 | ❌ Ineligible | Rejects system prompts; 12B / 32K context too small. |
-| `arcee-ai/trinity-mini:free` | 2026-02-20 | 0/1 | ❌ Ineligible | Reasoning model — `content: ""` + `reasoning` field confirmed. |
-| `nvidia/nemotron-3-nano-30b-a3b:free` | 2026-02-20 | 0/1 | ❌ Ineligible | Reasoning model confirmed. |
-| `qwen/qwen3-235b-a22b:free` | 2026-02-20 | 0/1 | ❌ Ineligible | `No endpoints found` on OpenRouter. |
-| `openai/gpt-oss-120b:free` | 2026-02-20 | 0/1 | ❌ Blocked | Requires enabling data sharing in OpenRouter privacy settings. |
-| `openai/gpt-oss-20b:free` | 2026-02-20 | 0/1 | ❌ Blocked | Same data policy restriction. |
-
-### Models confirmed as reasoning/thinking (excluded)
-
-| Model | Evidence |
-|-------|----------|
-| `upstage/solar-pro-3:free` | `reasoning_details` field in API response (2026-02-19) |
-| `z-ai/glm-4.5-air:free` | `reasoning_details` field in API response (2026-02-19) |
-| `arcee-ai/trinity-mini:free` | `content: ""` + `reasoning` field populated (2026-02-20) |
-| `nvidia/nemotron-3-nano-30b-a3b:free` | `content: ""` + `reasoning` field populated (2026-02-20) |
-| `deepseek/deepseek-r1-0528:free` | R1 architecture — reasoning by design |
-| `qwen/qwen3-*-thinking` variants | Thinking variant in name |
-| `stepfun/step-3.5-flash:free` | Empty `content` in practice (2026-02-19) |
-
-### Models excluded for other reasons
-
-| Model | Reason |
-|-------|--------|
-| `qwen/qwen3-235b-a22b:free` | 404 — no endpoints on OpenRouter |
-| `openai/gpt-oss-120b:free` / `20b:free` | OpenRouter data policy restriction |
-| `google/gemma-3-12b-it:free` | Rejects system prompts; 12B / 32K context too small |
-| `meta-llama/llama-3.2-3b-instruct:free` | 3B — too small |
-| `qwen/qwen3-4b:free` | 4B — too small |
-| `google/gemma-3-4b-it:free` / `3n-e*` | Too small |
-| `openrouter/free` | Routes to a random model — not reproducible |
-
-### Current recommendation
-
-**Primary model: `google/gemini-2.0-flash-001`** — the only model tested that passes all
-6 probe tests AND performs paper-aligned single-call merge at scale. See §5 for selection
-rationale and cost breakdown.
-
-For zero-cost comparison runs, retry the Venice-blocked free models (Llama 70B, Mistral 24B,
-Gemma 27B, Hermes 405B) during off-peak hours — but confirm merge capability with
-`probe_models.py` before use.
-
----
-
-## 7. Pipeline Execution Log
-
-### Run 01 — `massive_scenario` · `arcee-ai/trinity-large-preview:free` · 2026-02-20
-
-First end-to-end validation run. Target: lightest dataset (2,974 samples, 18 classes).  
-Pipeline executed with **no code changes** relative to v1.2.0 — unmodified prompts, default `LLM_MAX_TOKENS=512`.
-
-#### Estimated cost per step (pre-run)
-
-| Step | Command | API calls | Time @ 4s/call |
-|------|---------|-----------|----------------|
-| 0 | `tc-seed-labels` | 0 | ~2s |
-| 1 | `tc-label-gen` | ~200 (chunks + merge) | ~13 min |
-| 2 | `tc-classify` | 2,974 (one per text) | ~3h20 |
-| 3 | `tc-evaluate` | 0 | ~5s |
-
-#### Step 0 — seed labels ✅
-
-```
-Completed : 2026-02-20 16:13:18  (~2s)
-Output    : runs/chosen_labels.json
-Seeds     : arxiv_fine=18, go_emotion=5, massive_intent=11, massive_scenario=3, mtop_intent=20
-```
-
-#### Step 1 — label generation ✅
-
-```
-Completed : 2026-02-20 16:40:38  (26.6 min — 198 chunk calls + 1 merge call)
-Run dir   : runs/massive_scenario_small_20260220_161359/
-Proposed  : 190 labels  (before merge)
-Merged    : 190 labels  (merge call silently failed — see issue below)
-```
-
-**Issue discovered — merge response truncated at 512 tokens**:  
-The `LLM_MAX_TOKENS=512` default is too small for a merge response covering 190 labels
-(~2,300 tokens needed). The merge API call returned a truncated JSON string, `eval()` threw an
-exception, and `merge_labels()` silently fell back to returning the unmerged list unchanged.
-The pipeline continued without any error or warning. Result: 190 labels for an 18-class dataset.
-
-#### Step 2 — classification ✅
-
-```
-Started   : 2026-02-20 16:45:25
-Completed : 2026-02-20 21:14:53  (4h29 — 2,974 API calls)
-Classified into 168 distinct predicted labels (22 of the 190 received 0 samples)
-Output    : runs/massive_scenario_small_20260220_161359/classifications.json
-```
-
-#### Step 3 — evaluation ✅
-
-```
-Completed : 2026-02-20 21:45:34
-n_clusters_pred : 168  (vs. 18 true)
-```
-
-#### Root cause — per-class fragmentation
-
-The merge received 190 labels and returned 190 unchanged (truncated response, silent fallback).
-168 of those received at least one sample. Each true class was split across multiple predicted
-labels instead of being captured by one:
-
-| True class | n | Dominant predicted label | % captured | # predicted splits |
-|------------|---|--------------------------|------------|---------------------|
-| `alarm` | 96 | `alarm` | 91% | 3 |
-| `weather` | 156 | `weather` | 88% | 10 |
-| `cooking` | 72 | `recipe` | 69% | 8 |
-| `news` | 124 | `news` | 70% | 18 |
-| `email` | 271 | `email` | 53% | 23 |
-| `music` | 81 | `music` | 53% | 9 |
-| `datetime` | 103 | `time` | 48% | 8 |
-| `social` | 106 | `social media` | 46% | 17 |
-| `takeaway` | 57 | `food order` | 40% | 9 |
-| `transport` | 124 | `train` | 35% | 9 |
-| `play` | 387 | `music` | 35% | 26 |
-| `iot` | 220 | `lighting control` | 35% | 13 |
-| `lists` | 142 | `list` | 32% | 26 |
-| `calendar` | 402 | `calendar` | 32% | 35 |
-| `recommendation` | 94 | `local events` | 33% | 23 |
-| `audio` | 62 | `volume control` | 39% | 14 |
-| `general` | 189 | `general` | 23% | 61 |
-| `qa` | 288 | `general knowledge` | 15% | 39 |
-
-**Concrete synonym groups that should have been merged but weren't:**
-
-| True class | Un-merged synonyms |
-|------------|--------------------|
-| `datetime` | `time`, `date`, `time zone`, `time conversion`, `date time` |
-| `play` | `music`, `music playback`, `podcast`, `podcasts`, `radio`, `audiobook` |
-| `audio` | `volume control`, `volume`, `sound control`, `mute`, `media control` |
-| `lists` | `list`, `lists`, `to-do list`, `task management`, `task` |
-| `takeaway` | `food order`, `food`, `delivery`, `order`, `order tracking`, `restaurant locate` |
-
-The label-generation step worked correctly — every true class concept appears in the proposed
-list. The failure is entirely in the merge step (silently skipped due to token truncation).
-The metric gap (ACC −31, NMI −11, ARI −24 vs. paper) is an artifact of taxonomy fragmentation,
-not classification quality or model capability.
-
----
-
-### Run 02 — Merge Investigation & Model Switch
-
-After merging the fixes from `fix/run-02-prep` into `develop` (`b717cbb`), three Step 1 re-runs
-were attempted for `massive_scenario`. All three revealed a deeper problem: the merge step
-continued to fail, for different reasons each time.
-
-#### Step 1 re-attempts — Fix A+B+C applied
-
-**Date**: 2026-02-21  **Model**: `arcee-ai/trinity-large-preview:free`
-
-```
-Proposed labels : 158
-Merged labels   : 158   ← WARNING: 8.8× the true class count (18)
-```
-
-**Root cause 1 — Parser crash on flat list**: The model returned a flat JSON array
-`["a", "b", ...]` instead of the expected dict `{"merged_labels": [...]}`. The original parser
-iterated `parsed.values()`, which crashes on a list, silently falling back to the unmerged list.
-Fixed with `_parse_merge_response()` (handles both dict and list responses).
-
-**Root cause 2 — Model capability ceiling**: Even after fixing the parser, the model cannot
-semantically consolidate labels at this scale. It performs cosmetic reformatting
-(snake_case → space case) but cannot reason that `"iot"` + `"smart_home"` + `"lighting_control"`
-+ `"home_automation"` all refer to one cluster.
-
-#### Batched multi-pass merge attempt
-
-To work around the ceiling, a batched merge strategy was implemented:
-
-- **Phase 1**: merge each batch of 30 labels independently (the model handles 30 reliably)
-- **Phase 2**: merge the reduced batch outputs in a final call
-- **Iteration**: repeat up to 5 passes or until progress stalls
-
-**Result**: 154 → 149 → 144 → stalled. Only 10 labels removed across 3 passes. The model
-cannot perform cross-concept grouping even in small batches. It is a capability gap for semantic consolidation, not a
-scale problem.
-
-#### Map-to-canonical approach — explored and REJECTED
-
-To bypass free-form consolidation, a guided mapping approach was implemented: give the model all
-18 true labels as canonical anchors, and ask it to match each proposed label to the closest
-canonical one.
-
-**Result**: 154 proposed → 18 canonical labels in 4 API calls. Works perfectly.
-
-**Why rejected — data leakage**: The paper's pipeline is semi-supervised. The only ground truth
-visible to the LLM is the 20% seed labels (`chosen_labels.json`). For `massive_scenario` that
-is 3 of 18 labels: `["iot", "music", "general"]`. The full true label set (`labels_true.json`)
-is used **only** for metric computation in Step 3 — never passed to the LLM.
-
-This approach passes **all 18 true labels** to the merge step — 15 labels the paper deliberately
-withheld. Any metrics produced would inflate accuracy and cannot be compared to the paper
-baseline.
-
-| Step | Paper's LLM sees | map-to-canonical gives |
-|------|-----------------|------------------------|
-| Generation | 3 seed labels | 3 seed labels ✅ |
-| Merge | Proposed list only | **All 18 true labels** ← leak ❌ |
-| Classification | Merged list | Merged list ✅ |
-
-The full implementation is preserved on `archive/map-to-canonical` for reference. It must never
-be merged to `develop`.
-
-#### Root cause summary
-
-The fundamental issue is **model capability**, not code design. `trinity-large-preview` cannot
-perform semantic cross-concept consolidation across 150+ labels the way GPT-3.5-turbo does.
-There is no paper-aligned workaround — only a model switch resolves this.
-
-#### Resolution — switch to `google/gemini-2.0-flash-001`
-
-**Merge test (2026-02-21)**:
-```
-Input:  167 labels
-Output: 28 labels  in 1.9 seconds  (single call, paper-aligned)
-```
-
-This is the behaviour the paper describes. See §5 for cost estimate and §6 for full probe
-results. The model switch makes all workarounds unnecessary.
-
----
-
-### Run 02 — `massive_scenario` · `google/gemini-2.0-flash-001` · `target_k=18` · 2026-02-21
-
-First full end-to-end run with gemini. `target_k=len(true_labels)` passed to the merge prompt
-as a legacy workaround (later removed — see Run 03 for the investigation).
-
-**Run directory**: `runs/massive_scenario_small_20260221_035641/`  
-**Commit**: `fix/model-gemini-flash` @ `333ce12`
-
-#### Step 1 — label generation ✅
-
-```
-Started   : 2026-02-21 03:56:41
-Completed : 2026-02-21 04:06:45  (604 s ≈ 10.1 min)
-API calls : 200  (199 label-gen batches + 1 merge call)
-Errors    : 0
-Proposed  : 352 labels  (343 unique after dedup)
-Merged    : 18 labels   (target_k=18 passed to merge prompt)
-True k    : 18
-```
-
-The 352 proposed labels showed the expected fragmentation across synonym groups:
-20 time variants, 17 music variants, 17 email/comm variants, 16 iot/home variants.
-Gemini collapsed all of them to 18 in a single merge call (~3s), which is the paper-aligned
-behaviour. The merge produced no parse errors.
-
-**Merged label set** (18 labels):
-
-```json
-["general_information", "time_and_date", "events_and_calendar", "food_and_drink",
- "music_and_audio", "movies_and_tv", "shopping_and_orders", "travel_and_transportation",
- "home_automation", "communication", "personal_management", "finance_and_investments",
- "health_and_wellbeing", "news_and_social_media", "jokes_and_entertainment",
- "search_and_recommendations", "device_control", "location_and_navigation"]
-```
-
-**Label quality audit** (18 merged vs. 18 true):
-
-| Status | Count | Labels |
-|--------|-------|--------|
-| ✅ Good semantic match | 10 | `general_information` → qa+general; `time_and_date` → datetime; `events_and_calendar` → calendar; `food_and_drink` → takeaway+cooking; `music_and_audio` → music+audio+play; `travel_and_transportation` → transport; `home_automation` → iot; `communication` → email+social; `personal_management` → alarm+lists; `shopping_and_orders` → lists |
-| ⚠️ Overlap (duplicate concept) | 4 | `news_and_social_media` (∥ communication), `search_and_recommendations` (∥ general_information), `device_control` (∥ home_automation), `location_and_navigation` (∥ transport) |
-| 🔴 Spurious (no true counterpart) | 4 | `movies_and_tv`, `finance_and_investments`, `health_and_wellbeing`, `jokes_and_entertainment` |
-
-**Missing**: `weather` — present in proposed labels but dropped by the merge. 156 weather
-samples (an entire true class) were later scattered across `general_information` (78%),
-`location_and_navigation` (8%), and `time_and_date` (6%).
-
-Root cause: forcing `target_k=18` compelled gemini to fill all 18 slots. With 4 spurious
-labels occupying slots, `weather` had no slot to land in and was absorbed into the nearest
-neighbor during classification.
-
-#### Step 2 — classification ✅
-
-```
-Started   : 2026-02-21 04:18:15
-Completed : 2026-02-21 06:26:49  (7,714 s ≈ 2h09)
-Samples   : 2,974  (one API call each)
-Errors    : 0
-```
-
-#### Step 3 — evaluation ✅
-
-```
-Completed : 2026-02-21 13:54:01
-```
-
-**Per-cluster purity highlights**:
-
-| Predicted cluster | Size | Purity | Dominant true label |
-|-------------------|------|--------|---------------------|
-| `home_automation` | 192 | 0.958 | iot: 96% |
-| `communication` | 260 | 0.900 | email: 90% |
-| `travel_and_transportation` | 110 | 0.855 | transport: 85% |
-| `events_and_calendar` | 388 | 0.838 | calendar: 84% |
-| `music_and_audio` | 405 | 0.800 | play: 80% |
-| `general_information` | 454 | 0.416 | qa: 42%, weather: 27% ← catch-all |
-| `time_and_date` | 184 | 0.538 | datetime: 54%, alarm: 33% ← split |
-| `search_and_recommendations` | 65 | 0.292 | scattered ← lowest purity |
-
-**Most fragmented true class**: `recommendation` — spread across 5 predicted clusters, best
-concentration only 32%.
-
----
-
-### Run 03 — `massive_scenario` · `google/gemini-2.0-flash-001` · no `target_k` · 2026-02-21
-
-After the code audit (§4 fix 8), `target_k` was removed from the default merge call to restore
-paper-faithful behaviour. This run tests whether gemini consolidates aggressively enough
-without a target anchor.
-
-**Run directory**: `runs/massive_scenario_small_20260221_150023/`  
-**Commit**: `fix/model-gemini-flash` @ `9cef357`  
-**Steps completed**: Step 1 only (run aborted after inspecting merge output).
-
-#### Step 1 — label generation ✅ / merge ❌
-
-```
-Proposed  : 343 labels
-Merged    : 311 labels   ← only 32 labels removed (1.1× reduction)
-True k    : 18
-```
-
-Without a `target_k` anchor, gemini treated the merge as **light deduplication** instead of
-aggressive semantic consolidation. It removed near-identical surface duplicates
-(`movie`/`movies`, `email`/`emails`, `restaurant`/`restaurants`) but left all major synonym
-groups intact:
-
-| Synonym group | Surviving variants in merged output |
-|---------------|-------------------------------------|
-| music | 15: `music`, `song`, `playlist`, `music_playback`, `music_control`, `music_streaming`, … |
-| time | 11: `time`, `date`, `datetime`, `time_and_date`, `timer`, `time_conversion`, … |
-| calendar/meeting | 9: `calendar`, `schedule`, `meeting`, `meeting_scheduling`, `calendar_management`, … |
-| search/query | 9: `search`, `query`, `queries`, `search_engine`, `search_query`, … |
-| iot/home | 8: `iot`, `home_automation`, `lights`, `lighting`, `automation`, `device_control`, … |
-
-**Step 2 and Step 3 were not run** — a 311-cluster classification would produce metrics even
-worse than Run 01 (168 clusters) and cost ~$0.50 with no scientific value.
-
-#### Conclusion
-
-The paper's approach requires the LLM to know the target granularity. GPT-3.5-turbo was able
-to consolidate without an explicit target likely because the paper's prompt tuning or its
-training data aligned well with the 15-class semantic space. Gemini-2.0-flash, despite being
-a stronger model, interprets the prompt conservatively without guidance.
-
-**Decision**: `target_k` must remain the default for this pipeline. It is not a "weak model
-workaround" — it is a necessary semantic anchor for any model when the proposed label count is
-in the hundreds. The `--target_k` CLI flag is now mandatory for comparable results.
-
-A follow-up iteration (`fix/merge-prompt-v2`) will redesign the merge prompt to be more
-inherently aggressive without relying on a numeric target, using stronger consolidation
-language and few-shot examples. See §9 Next Steps.
-
----
-
-## 8. Results
-
-Paper results use `gpt-3.5-turbo-0125`, batch size 15, 20% seed labels, small split.  
-Column order in Table 2 (paper): ArxivS2S | GoEmo | Massive-D | Massive-I | MTOP-I.
-
-### Paper baseline (Table 2 — our method row)
+## 2. Experimental Setup
+
+### Datasets (small split)
+
+| Dataset | Samples | True k | Domain |
+|---------|---------|--------|--------|
+| `massive_scenario` | 2,974 | 18 | Voice assistant scenarios |
+| `massive_intent` | 2,974 | 59 | Voice assistant intents |
+| `mtop_intent` | 4,386 | 102 | Multi-domain task intents |
+| `arxiv_fine` | 3,674 | 93 | Academic paper topics |
+| `go_emotion` | 5,940 | 27 | Emotion detection |
+
+### Models & Infrastructure
+
+| Component | Value |
+|-----------|-------|
+| **LLM** | `gpt-4o-mini` (OpenAI) |
+| **Embedding model** | `all-MiniLM-L6-v2` (384-dim) |
+| **Evaluation metrics** | ACC (Hungarian-matched), ARI, NMI |
+| **Seed labels** | 20% of true labels (per paper protocol) |
+| **Random state** | 42 (fixed for reproducibility) |
+
+### Paper Baseline (Table 2 — reference results with `gpt-3.5-turbo-0125`)
 
 | Dataset | ACC | NMI | ARI |
 |---------|-----|-----|-----|
-| `arxiv_fine` | 38.78 | 57.43 | 20.55 |
-| `go_emotion` | 31.66 | 27.39 | 13.50 |
 | `massive_scenario` | 71.75 | 78.00 | 56.86 |
 | `massive_intent` | 64.12 | 65.44 | 48.92 |
 | `mtop_intent` | 72.18 | 78.78 | 71.93 |
+| `arxiv_fine` | 38.78 | 57.43 | 20.55 |
+| `go_emotion` | 31.66 | 27.39 | 13.50 |
 
 ---
 
-### `massive_scenario` · small split — all runs
+## 3. Pipeline Versions
 
-| Run | Model | target_k | n_pred | ACC | NMI | ARI | Status |
-|-----|-------|----------|--------|-----|-----|-----|--------|
-| Paper | `gpt-3.5-turbo-0125` | implicit | ~18 | **71.75** | **78.00** | **56.86** | Reference |
-| Run 01 | `trinity-large-preview:free` | — | **168** | 40.69 | 66.64 | 33.06 | ❌ Broken merge (token truncation) |
-| Run 02 | `gemini-2.0-flash-001` | 18 | **18** | **60.46** | **63.90** | **53.87** | ✅ Valid |
-| Run 03 | `gemini-2.0-flash-001` | none | — | — | — | — | ⚠️ Step 1 only — merge failed (311 labels) |
+### SEAL-Clust v2 (LLM-based, `paper/` pipeline)
 
-#### Run 02 vs. paper gap analysis
+The reproduction of the original paper's approach adapted to our infrastructure:
+1. **Label generation**: LLM reads chunks of 15 texts, proposes candidate labels
+2. **Label merging**: LLM consolidates candidates into a final label set (single call)
+3. **Classification**: LLM assigns each text to one label (one call per text)
 
-| Metric | Run 02 | Paper | Gap | Notes |
-|--------|--------|-------|-----|-------|
-| ACC | 60.46 | 71.75 | −11.29 | 4 spurious labels + missing `weather` cluster |
-| NMI | 63.90 | 78.00 | −14.10 | Overlapping merged labels split true classes |
-| ARI | **53.87** | **56.86** | **−2.99** | Near-paper — cluster structure nearly correct |
+Runs are identified by directory names like `<dataset>_small_<timestamp>` without `v3` or `baseline` suffixes.
 
-ARI within 3 points of the paper — the overall cluster assignment structure is sound.
-The ACC gap is driven by 4 identifiable label-quality issues (all traceable to `target_k`
-forcing spurious slot-filling). The NMI gap reflects 4 overlapping merged labels that split
-true classes across multiple predicted buckets.
+### SEAL-Clust v2 (batched)
 
-**The remaining gap is a label quality problem, not a model capability problem.**
+A variant with multi-pass batched merging to work around model merge limitations. Labels are merged in batches of 30, then batch outputs are merged again, iterating until convergence.
+
+### SEAL-Clust v3 (embedding-based + LLM)
+
+A new hybrid pipeline:
+1. **Embed**: Encode all documents with `all-MiniLM-L6-v2`
+2. **Cluster**: Apply KMedoids, KMeans, or GMM to get k₀ initial clusters
+3. **Discover labels**: LLM reads cluster representatives and proposes labels
+4. **Consolidate**: LLM merges candidate labels down to k* final labels
+5. **Classify**: LLM assigns each text to one of the final labels
+
+Key parameters:
+- `k0`: Number of initial clusters (overclustering factor)
+- `k_star`: Target number of final labels
+- `cluster_method`: `kmedoids` | `gmm` | `kmeans`
+- `label_source`: `all` (all texts) | `representatives` (cluster medoids/centroids only)
+- `reduction`: `none` | `pca` (PCA dimensionality reduction before clustering)
+
+### Baseline KMeans
+
+Pure embedding-based: embed → KMeans(k=true_k) → evaluate. No LLM involved. Labels assigned by cluster index, matched to ground truth via Hungarian algorithm.
+
+### Baseline GMM
+
+Same as Baseline KMeans but using Gaussian Mixture Models with tied or diagonal covariance.
 
 ---
 
-## 9. Next Steps
+## 4. Results by Dataset
 
-### Immediate — v1.3.0 release
+### 4.1. `massive_scenario`
 
-- [x] `fix/model-gemini-flash` complete and pushed
-- [ ] PR: `fix/model-gemini-flash` → `develop`
-- [ ] PR: `develop` → `main`
-- [ ] `cz bump` → v1.3.0
+**True k = 18 · n = 2,974 · Paper ACC = 71.75**
 
-### Next iteration — `fix/merge-prompt-v2`
+This is the most extensively tested dataset with 30+ completed runs spanning all pipeline versions.
 
-Redesign the merge prompt to consolidate aggressively **without** a numeric `target_k`, in
-order to respect the semi-supervised nature of the pipeline. Approach:
+#### SEAL-Clust v2 (best runs)
 
-- Stronger consolidation language ("merge any label that refers to the same real-world intent,
-  even if the wording differs")
-- Explicit examples of what must be merged (alarm/reminder/alarms → one label)
-- Possibly a two-phase prompt: first cluster by concept domain, then name each cluster
-- Success criterion: gemini produces ≤ 30 labels from 350 proposed without `--target_k`
+| Run | pred_k | ACC | ARI | NMI | Notes |
+|-----|--------|-----|-----|-----|-------|
+| `20260323_134134` | 18 | **0.6796** | **0.5844** | **0.6609** | Best v2 overall |
+| `20260319_094252` | 19 | 0.6264 | 0.4966 | 0.6193 | |
+| `20260318_114822` | 17 | 0.6251 | 0.4908 | 0.6122 | |
+| `20260319_093025` | 18 | 0.6224 | 0.4917 | 0.6041 | |
+| `20260322_203140` | 19 | 0.5999 | 0.5138 | 0.6181 | |
+| `20260319_141430` | 18 | 0.5978 | 0.4293 | 0.5759 | |
+| `20260323_124000` | 19 | 0.5945 | 0.4873 | 0.5925 | |
+| `20260323_133312` | 19 | 0.5831 | 0.4635 | 0.6103 | |
+| `20260323_131550` | 18 | 0.5773 | 0.4483 | 0.5850 | |
+| `20260314_113900` | 7 | 0.5632 | 0.3866 | 0.5515 | Under-clustered |
+| `20260312_120831` | 20 | 0.5521 | 0.3985 | 0.5725 | |
+| `20260312_112628` | 20 | 0.5498 | 0.4166 | 0.5778 | |
+| `20260323_134749` | 17 | 0.5454 | 0.4193 | 0.5630 | |
+| `20260313_095906` | 17 | 0.5363 | 0.4053 | 0.5851 | |
+| `20260314_124216` | 18 | 0.5356 | 0.4492 | 0.5917 | |
+| `20260318_141242` | 18 | 0.5148 | 0.3906 | 0.5061 | |
+| `20260313_135205` | 20 | 0.4344 | 0.2766 | 0.4237 | |
+| `20260313_113104` | 12 | 0.4321 | 0.2614 | 0.4468 | Under-clustered |
+| `20260318_143356` | 19 | 0.4210 | 0.2822 | 0.4820 | |
 
-After a successful prompt redesign, re-run `massive_scenario` without `--target_k` and compare
-to Run 02.
+**v2 range**: ACC 0.421–0.680 | ARI 0.261–0.584 | NMI 0.424–0.661  
+**v2 best**: ACC=0.680, ARI=0.584, NMI=0.661 (gap to paper: −5.4% ACC)
 
-### After merge prompt validated
+#### SEAL-Clust v2 (batched)
 
-- [ ] Run remaining 4 datasets with gemini (`massive_intent`, `go_emotion`, `arxiv_fine`, `mtop_intent`)
-- [ ] Record full 5-dataset results table in §8
-- [ ] Compare to paper Table 2
+| Run | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----|-----|
+| `batched_20260319_100000` | 18 | 0.5797 | 0.4415 | 0.6082 |
 
-### Longer term
+#### SEAL-Clust v3
 
-- [ ] Re-probe Venice-blocked free models (Llama 70B, Mistral 24B) during off-peak hours — confirm merge capability before use
-- [ ] Once a second model passes merge test, run the same pipeline and compare results
+| Run | Method | k₀ | Label src | Reduction | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----------|-----------|--------|-----|-----|-----|
+| `v3_20260323_114701` | kmedoids | 300 | reps | none | 18 | **0.5488** | **0.4090** | 0.5376 |
+| `v3_20260323_120334` | kmeans | 300 | reps | none | 18 | 0.5430 | 0.4182 | **0.5751** |
+| `v3_20260323_104132` | kmedoids | 300 | — | pca | 18 | 0.5327 | 0.4087 | 0.5479 |
+| `v3_20260323_120041` | gmm | 300 | reps | none | 18 | 0.5145 | 0.3614 | 0.5233 |
+| `v3_20260323_142230` | kmedoids | 500 | reps | pca | 19 | 0.4970 | 0.2956 | 0.4755 |
+| `v3_20260323_141537` | kmedoids | 1000 | reps | pca | 18 | 0.4909 | 0.3380 | 0.5068 |
+| `v3_20260323_120914` | gmm | 300 | reps | none | 18 | 0.4896 | 0.3605 | 0.5217 |
+| `v3_20260323_135401` | kmedoids | 300 | reps | pca | 18 | 0.4876 | 0.3658 | 0.5289 |
+| `v3_20260323_140338` | kmedoids | 2000 | reps | pca | 18 | 0.4455 | 0.3133 | 0.5142 |
+| `v3_20260323_115259` | kmeans | 300 | reps | none | 18 | 0.1859 | 0.0374 | 0.1437 | 🐛 ordering bug |
+| `v3_20260323_114930` | gmm | 300 | reps | none | 18 | 0.1769 | 0.0324 | 0.1485 | 🐛 ordering bug |
+| `v3_20260323_113425` | gmm | 300 | — | none | 18 | 0.1624 | 0.0354 | 0.1498 | 🐛 ordering bug |
 
-> **Note on `run.sh`**: The original script runs all 5 datasets in parallel using `nohup ... &`.
-> With a single API key this saturates rate limits immediately.
-> We run datasets sequentially instead.
+#### Baseline KMeans
+
+| Run | PCA dims | pred_k | ACC | ARI | NMI |
+|-----|----------|--------|-----|-----|-----|
+| `kmeans_20260318_150511` | 100 | 18 | **0.5972** | **0.4614** | **0.6500** |
+| `kmeans_20260318_150453` | 50 | 18 | 0.5861 | 0.4519 | 0.6415 |
+| `kmeans_20260318_150425` | 0 | 18 | 0.5807 | 0.4318 | 0.6453 |
+| `kmeans_20260318_150611` | 0 (auto_k) | 24 | 0.5541 | 0.4167 | 0.6537 |
+
+#### Baseline GMM
+
+| Run | Covariance | pred_k | ACC | ARI | NMI |
+|-----|------------|--------|-----|-----|-----|
+| `gmm_20260318_150526` | tied | 18 | **0.5790** | **0.4119** | **0.6469** |
+| `gmm_20260318_150550` | diag | 18 | 0.5548 | 0.3545 | 0.6219 |
+
+#### Summary — `massive_scenario`
+
+| Pipeline | Best ACC | Best ARI | Best NMI |
+|----------|----------|----------|----------|
+| **Paper baseline** | **0.7175** | **0.5686** | **0.7800** |
+| SEAL-Clust v2 | 0.6796 | 0.5844 | 0.6609 |
+| Baseline KMeans (PCA=100) | 0.5972 | 0.4614 | 0.6500 |
+| Baseline GMM (tied) | 0.5790 | 0.4119 | 0.6469 |
+| SEAL-Clust v2 (batched) | 0.5797 | 0.4415 | 0.6082 |
+| SEAL-Clust v3 (kmedoids) | 0.5488 | 0.4090 | 0.5376 |
+| SEAL-Clust v3 (kmeans) | 0.5430 | 0.4182 | 0.5751 |
+| SEAL-Clust v3 (gmm) | 0.5145 | 0.3614 | 0.5233 |
+
+---
+
+### 4.2. `massive_intent`
+
+**True k = 59 · n = 2,974 · Paper ACC = 64.12**
+
+#### SEAL-Clust v2
+
+| Run | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----|-----|
+| `20260322_204338` | 115 | **0.4627** | 0.3643 | **0.6796** |
+| `20260319_151040` | 57 | 0.4583 | **0.3721** | 0.6414 |
+| `20260319_135325` | 55 | 0.4452 | 0.3303 | 0.6433 |
+| `20260313_141759` | 19 | 0.3837 | 0.2426 | 0.3916 |
+
+Note: The earliest run (March 13) heavily under-clustered (19 vs 59 true), causing a significant ACC drop.
+
+#### SEAL-Clust v3
+
+| Run | Method | k₀ | Label src | Reduction | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----------|-----------|--------|-----|-----|-----|
+| `v3_20260323_142841` | kmedoids | 300 | reps | none | 55 | **0.4943** | 0.3817 | 0.6416 |
+| `v3_20260323_121358` | gmm | 300 | reps | none | 59 | 0.4879 | **0.3930** | **0.6516** |
+| `v3_20260323_104537` | kmedoids | 300 | — | pca | 59 | 0.4701 | 0.3489 | 0.6304 |
+
+#### Baselines
+
+| Pipeline | PCA dims | pred_k | ACC | ARI | NMI |
+|----------|----------|--------|-----|-----|-----|
+| KMeans | 0 | 59 | **0.5356** | 0.3796 | 0.7030 |
+| KMeans | 100 | 59 | 0.5171 | **0.3817** | **0.7013** |
+| GMM (tied) | 0 | 59 | 0.5171 | 0.3740 | 0.6916 |
+
+#### Summary — `massive_intent`
+
+| Pipeline | Best ACC | Best ARI | Best NMI |
+|----------|----------|----------|----------|
+| **Paper baseline** | **0.6412** | **0.4892** | **0.6544** |
+| Baseline KMeans | 0.5356 | 0.3796 | 0.7030 |
+| Baseline GMM | 0.5171 | 0.3740 | 0.6916 |
+| SEAL-Clust v3 (kmedoids) | 0.4943 | 0.3817 | 0.6416 |
+| SEAL-Clust v3 (gmm) | 0.4879 | 0.3930 | 0.6516 |
+| SEAL-Clust v2 | 0.4627 | 0.3721 | 0.6796 |
+
+---
+
+### 4.3. `mtop_intent`
+
+**True k = 102 · n = 4,386 · Paper ACC = 72.18**
+
+This is the dataset where LLM-based methods most dramatically outperform pure embedding baselines.
+
+#### SEAL-Clust v2
+
+| Run | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----|-----|
+| `20260319_205405` | 88 | **0.5771** | **0.5887** | **0.7296** |
+| `20260322_215830` | 90 | 0.5091 | 0.4745 | 0.6798 |
+
+#### SEAL-Clust v3
+
+| Run | Method | k₀ | Label src | Reduction | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----------|-----------|--------|-----|-----|-----|
+| `v3_20260323_144706` | kmedoids | 1000 | reps | none | 67 | **0.5939** | 0.5642 | **0.7087** |
+| `v3_20260323_110729` | kmedoids | 1000 | — | pca | 68 | 0.5853 | **0.5707** | 0.7045 |
+
+#### Baselines
+
+| Pipeline | PCA dims | pred_k | ACC | ARI | NMI |
+|----------|----------|--------|-----|-----|-----|
+| GMM (tied) | 0 | 102 | **0.3497** | **0.2542** | **0.6861** |
+| KMeans | 0 | 102 | 0.3297 | 0.2462 | 0.6859 |
+| KMeans | 100 | 102 | 0.2793 | 0.2116 | 0.6693 |
+
+#### Summary — `mtop_intent`
+
+| Pipeline | Best ACC | Best ARI | Best NMI |
+|----------|----------|----------|----------|
+| **Paper baseline** | **0.7218** | **0.7193** | **0.7878** |
+| **SEAL-Clust v3 (kmedoids)** | **0.5939** | **0.5707** | **0.7087** |
+| SEAL-Clust v2 | 0.5771 | 0.5887 | 0.7296 |
+| Baseline GMM | 0.3497 | 0.2542 | 0.6861 |
+| Baseline KMeans | 0.3297 | 0.2462 | 0.6859 |
+
+> **Standout result**: LLM methods outperform baselines by **+80% ACC** on this high-k dataset. The 102 intent classes are semantically rich enough that the LLM's language understanding provides a massive advantage over pure embedding similarity.
+
+---
+
+### 4.4. `arxiv_fine`
+
+**True k = 93 · n = 3,674 · Paper ACC = 38.78**
+
+The hardest dataset for LLM-based methods. Fine-grained academic topic distinctions (e.g., `cs.AI` vs `cs.ML` vs `cs.CL`) are difficult for the LLM to discover and distinguish.
+
+#### SEAL-Clust v2
+
+| Run | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----|-----|
+| `20260319_195056` | 90 | **0.2191** | **0.1150** | **0.5135** |
+| `20260319_221956` | 86 | 0.2025 | 0.0928 | 0.4488 |
+| `20260322_214422` | 64 | 0.1658 | 0.0704 | 0.4026 |
+| `20260318_120306` | 63 | 0.1622 | 0.0740 | 0.4059 |
+| `20260319_215647` | 19 | 0.1140 | 0.0662 | 0.3581 |
+
+#### SEAL-Clust v3
+
+| Run | Method | k₀ | Label src | Reduction | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----------|-----------|--------|-----|-----|-----|
+| `v3_20260323_122510` | gmm | 500 | reps | none | 73 | **0.1783** | **0.0786** | 0.4346 |
+| `v3_20260323_105426` | kmedoids | 500 | — | pca | 66 | 0.1758 | 0.0788 | 0.4153 |
+| `v3_20260323_123115` | gmm | 1000 | reps | none | 91 | 0.1712 | 0.0769 | **0.4489** |
+| `v3_20260323_145919` | kmedoids | 1000 | reps | none | 96 | 0.1666 | 0.0666 | 0.4037 |
+
+Note: The `v3_20260323_123115` run mistakenly used `k_star=102` (mtop_intent's k) instead of 93.
+
+#### Baselines
+
+| Pipeline | PCA dims | pred_k | ACC | ARI | NMI |
+|----------|----------|--------|-----|-----|-----|
+| KMeans | 100 | 93 | **0.3187** | **0.1719** | **0.5375** |
+| KMeans | 0 | 93 | 0.3078 | 0.1640 | 0.5310 |
+| GMM (tied) | 0 | 93 | 0.3013 | 0.1672 | 0.5319 |
+
+#### Summary — `arxiv_fine`
+
+| Pipeline | Best ACC | Best ARI | Best NMI |
+|----------|----------|----------|----------|
+| **Paper baseline** | **0.3878** | **0.2055** | **0.5743** |
+| **Baseline KMeans (PCA=100)** | **0.3187** | **0.1719** | **0.5375** |
+| Baseline GMM | 0.3013 | 0.1672 | 0.5319 |
+| SEAL-Clust v2 | 0.2191 | 0.1150 | 0.5135 |
+| SEAL-Clust v3 (gmm) | 0.1783 | 0.0786 | 0.4346 |
+
+> **Key observation**: Embedding baselines outperform all LLM-based pipelines on this dataset. The fine-grained academic taxonomy (93 narrow ArXiv categories) is inherently difficult for LLMs to discover from text alone. The embedding space captures subtle topical differences that the LLM's label generation step misses.
+
+---
+
+### 4.5. `go_emotion`
+
+**True k = 27 · n = 5,940 · Paper ACC = 31.66**
+
+The most challenging dataset for all methods. Emotion labels are inherently ambiguous — a single short text can plausibly belong to multiple emotion categories.
+
+#### SEAL-Clust v2
+
+| Run | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----|-----|
+| `20260319_184719` | 28 | **0.3157** | **0.1456** | **0.2536** |
+| `20260318_121756` | 26 | 0.1535 | 0.0512 | 0.0810 |
+| `20260322_213120` | 27 | 0.1458 | 0.0265 | 0.0766 |
+
+Note: The first run (March 19) is a strong outlier — significantly better than all others. This likely reflects favorable LLM label generation in that particular run.
+
+#### SEAL-Clust v3
+
+| Run | Method | k₀ | Label src | Reduction | pred_k | ACC | ARI | NMI |
+|-----|--------|-----|-----------|-----------|--------|-----|-----|-----|
+| `v3_20260323_104914` | kmedoids | 300 | — | pca | 28 | **0.1562** | **0.0422** | **0.0893** |
+| `v3_20260323_121840` | gmm | 300 | reps | none | 28 | 0.1340 | 0.0250 | 0.0799 |
+| `v3_20260323_143714` | kmedoids | 500 | reps | none | 104 | 0.1175 | 0.0310 | 0.1219 |
+| `v3_20260323_143218` | kmedoids | 300 | reps | none | 27 | 0.1131 | 0.0138 | 0.0564 |
+
+Note: The `v3_20260323_143714` run used `k_star=93` (wrong dataset value), resulting in 104 predicted clusters.
+
+#### Baselines
+
+| Pipeline | PCA dims | pred_k | ACC | ARI | NMI |
+|----------|----------|--------|-----|-----|-----|
+| KMeans | 0 | 27 | **0.1448** | **0.0402** | **0.1093** |
+| KMeans | 50 | 27 | 0.1428 | 0.0393 | 0.1125 |
+| KMeans | 100 | 27 | 0.1352 | 0.0375 | 0.1117 |
+| GMM (tied) | 0 | 27 | 0.1264 | 0.0260 | 0.0893 |
+
+#### Summary — `go_emotion`
+
+| Pipeline | Best ACC | Best ARI | Best NMI |
+|----------|----------|----------|----------|
+| **Paper baseline** | **0.3166** | **0.1350** | **0.2739** |
+| SEAL-Clust v2 (outlier) | 0.3157 | 0.1456 | 0.2536 |
+| SEAL-Clust v3 (kmedoids) | 0.1562 | 0.0422 | 0.0893 |
+| Baseline KMeans | 0.1448 | 0.0402 | 0.1093 |
+| Baseline GMM | 0.1264 | 0.0260 | 0.0893 |
+
+> **Key observation**: All methods struggle significantly on `go_emotion`. The best v2 outlier aside, typical LLM runs produce ACC ≈ 0.15, comparable to random assignment for 27 classes (0.037). The emotion domain has high inter-annotator disagreement and many short, ambiguous texts.
+
+---
+
+## 5. Cross-Dataset Summary
+
+### Best ACC by Pipeline and Dataset
+
+| Pipeline | massive_scenario | massive_intent | mtop_intent | arxiv_fine | go_emotion |
+|----------|:---:|:---:|:---:|:---:|:---:|
+| **Paper baseline** | **0.718** | **0.641** | **0.722** | **0.388** | **0.317** |
+| SEAL-Clust v2 | 0.680 | 0.463 | 0.577 | 0.219 | 0.316 |
+| SEAL-Clust v3 | 0.549 | 0.494 | **0.594** | 0.178 | 0.156 |
+| Baseline KMeans | 0.597 | 0.536 | 0.330 | **0.319** | 0.145 |
+| Baseline GMM | 0.579 | 0.517 | 0.350 | 0.301 | 0.126 |
+
+### Best ARI by Pipeline and Dataset
+
+| Pipeline | massive_scenario | massive_intent | mtop_intent | arxiv_fine | go_emotion |
+|----------|:---:|:---:|:---:|:---:|:---:|
+| **Paper baseline** | **0.569** | **0.489** | **0.719** | **0.206** | **0.135** |
+| SEAL-Clust v2 | **0.584** | 0.372 | 0.589 | 0.115 | 0.146 |
+| SEAL-Clust v3 | 0.418 | 0.393 | **0.571** | 0.079 | 0.042 |
+| Baseline KMeans | 0.461 | 0.382 | 0.246 | **0.172** | 0.040 |
+| Baseline GMM | 0.412 | 0.374 | 0.254 | 0.167 | 0.026 |
+
+### Key Takeaways
+
+1. **SEAL-Clust v2 comes closest to the paper** on `massive_scenario` (ACC gap: −5.4%) and `go_emotion` (best run within 0.1%)
+2. **SEAL-Clust v3 excels on `mtop_intent`** — the highest-k dataset — achieving the best non-paper ACC (0.594)
+3. **Baselines win on `arxiv_fine`** — embedding similarity captures fine-grained academic categories better than LLM label discovery
+4. **Baselines win on `massive_intent`** in ACC — but v3 is competitive in ARI (0.393 vs 0.382)
+5. **`go_emotion` is universally hard** — typical ACC ≈ 0.13–0.16 across all methods
+
+### When does LLM help vs. hurt?
+
+| Dataset characteristic | LLM advantage | Explanation |
+|------------------------|---------------|-------------|
+| Many semantically distinct classes (mtop: 102) | **Strong** (+80% vs baseline) | LLM understands intent semantics that embeddings conflate |
+| Moderate classes, broad topics (massive_scenario: 18) | **Moderate** (+14% vs baseline) | LLM generates reasonable category names; some fragmentation |
+| Many fine-grained technical classes (arxiv: 93) | **Negative** (−31% vs baseline) | LLM cannot discover narrow academic taxonomy |
+| Emotion/affect classes (go_emotion: 27) | **Negligible** | Both LLM and embeddings fail on inherently ambiguous categories |
+
+---
+
+## 6. Analysis & Insights
+
+### 6.1. SEAL-Clust v3: Cluster Method Comparison
+
+Controlling for other parameters (k₀=300, label_source=representatives, reduction=none) on `massive_scenario`:
+
+| Method | ACC | ARI | NMI | Runs |
+|--------|-----|-----|-----|------|
+| **kmedoids** | **0.549** | **0.409** | 0.538 | 1 |
+| **kmeans** | 0.543 | 0.418 | **0.575** | 1 |
+| **gmm** (post-fix) | 0.514 | 0.361 | 0.523 | 2 (avg) |
+
+**Observation**: KMedoids and KMeans perform comparably. GMM lags slightly (−6% ACC), possibly because GMM soft assignments produce less coherent cluster representatives for the LLM to read.
+
+On `massive_intent` (k₀=300, reps, none):
+
+| Method | ACC | ARI | NMI |
+|--------|-----|-----|-----|
+| **kmedoids** | **0.494** | 0.382 | 0.642 |
+| **gmm** | 0.488 | **0.393** | **0.652** |
+
+Here GMM slightly edges out kmedoids on ARI and NMI, suggesting the pattern is dataset-dependent.
+
+### 6.2. SEAL-Clust v3: Label Source Analysis
+
+Comparing `label_source=all` (LLM sees all documents) vs `label_source=representatives` (LLM sees only cluster medoids):
+
+| Dataset | Method | all ACC | reps ACC | Δ |
+|---------|--------|---------|----------|---|
+| massive_scenario | kmedoids, k₀=300, pca | 0.533 | 0.488 | −0.045 |
+| massive_intent | kmedoids, k₀=300, pca | 0.470 | — | — |
+| mtop_intent | kmedoids, k₀=1000, pca | 0.585 | — | — |
+| mtop_intent | kmedoids, k₀=1000, none | — | **0.594** | — |
+
+**Note**: Direct comparisons are limited because `label_source=all` was mostly used with `reduction=pca` in early v3 runs, while `label_source=representatives` was paired with `reduction=none` later. The two best mtop_intent results (0.585 all/pca vs 0.594 reps/none) suggest that `representatives` mode with no reduction is at least as good, while being significantly faster (LLM reads k₀ texts instead of all n texts).
+
+### 6.3. SEAL-Clust v3: k₀ Sensitivity Analysis
+
+On `massive_scenario` (kmedoids, reps, pca) — a controlled sweep:
+
+| k₀ | n_candidates | n_final | pred_k | ACC | ARI | NMI |
+|-----|-------------|---------|--------|-----|-----|-----|
+| 300 | 55 | 18 | 18 | **0.488** | **0.366** | **0.529** |
+| 500 | 76 | 19 | 19 | 0.497 | 0.296 | 0.476 |
+| 1000 | 108 | 18 | 18 | 0.491 | 0.338 | 0.507 |
+| 2000 | 166 | 18 | 18 | 0.446 | 0.313 | 0.514 |
+
+**Observation**: Increasing k₀ beyond 300 does **not** improve results on this dataset. In fact, k₀=2000 performs worst. More initial clusters produce more candidate labels, making consolidation harder and noisier. The sweet spot appears to be k₀ ≈ 3–5× true k for moderate datasets.
+
+However, on `mtop_intent` (102 classes), k₀=1000 (≈10× true k) works well, suggesting high-k datasets benefit from more overclustering.
+
+### 6.4. SEAL-Clust v3: Reduction Analysis
+
+Comparing PCA vs no reduction on `massive_scenario` (kmedoids, k₀=300):
+
+| Reduction | Label src | ACC | ARI | NMI |
+|-----------|-----------|-----|-----|-----|
+| pca (100d) | all | 0.533 | 0.409 | 0.548 |
+| none (384d) | reps | 0.549 | 0.409 | 0.538 |
+| pca (100d) | reps | 0.488 | 0.366 | 0.529 |
+
+**Observation**: `reduction=none` slightly outperforms PCA in ACC on this dataset. The 384-dimensional embeddings from `all-MiniLM-L6-v2` may already be compact enough that PCA removes useful signal. However, the difference is small and confounded by the label_source change.
+
+### 6.5. GMM/KMeans Ordering Bug Impact
+
+A critical bug was discovered where `sorted(rep_indices)` broke the alignment between JSONL document order and cluster representative labels. This affected all GMM and KMeans runs in v3 before the fix.
+
+**Before vs after fix** (massive_scenario, k₀=300, reps, none):
+
+| Method | Pre-fix ACC | Post-fix ACC | Ratio |
+|--------|------------|-------------|-------|
+| gmm | 0.162–0.177 | 0.490–0.514 | **3.0×** |
+| kmeans | 0.186 | 0.543 | **2.9×** |
+| kmedoids | 0.549 | 0.549 | 1.0× (unaffected) |
+
+**Root cause**: KMedoids uses the original document indices as cluster centers, so the ordering is inherently correct. GMM and KMeans assign synthetic centroids, and the sorted indices scrambled the mapping between centroids and their assigned labels.
+
+The fix removed `sorted()` from 3 locations in `sealclust_v3_pipeline.py`, restoring the natural ordering. All GMM/KMeans runs before the fix (identifiable by ACC ≈ 0.16–0.19) should be discarded.
+
+### 6.6. Consolidation Accuracy
+
+The v3 consolidation step (merging n_candidates down to k*) does not always achieve the exact target:
+
+| Dataset | k* | n_candidates | n_final | Accuracy |
+|---------|-----|-------------|---------|----------|
+| massive_scenario | 18 | 55–178 | 18–19 | ✅ Good |
+| massive_intent | 59 | 60–71 | 60–64 | ⚠️ Slight overshoot |
+| mtop_intent | 102 | 44–131 | 44–104 | ⚠️ Variable |
+| arxiv_fine | 93 | 49–131 | 72–116 | ❌ Poor |
+| go_emotion | 27 | 46–142 | 27–136 | ⚠️ Highly variable |
+
+The consolidation struggles when:
+1. **n_candidates is close to k***: Not enough to merge (mtop k₀=700: 44 candidates for 102 target → kept 44)
+2. **k* is large**: The LLM has difficulty counting and deduplicating among 100+ labels
+3. **Labels are semantically distinct**: If candidates genuinely represent different concepts, the LLM correctly refuses to merge them
+
+A deterministic `_trim_labels_by_similarity()` post-processing step was added to guarantee exact k* output by merging the most similar label pairs using embedding cosine similarity.
+
+---
+
+## 7. Known Issues & Limitations
+
+### Incomplete/Failed Runs
+
+Several run directories contain no `results.json`, indicating incomplete or failed runs:
+
+| Count | Reason |
+|-------|--------|
+| ~15 runs | Step 1 (label generation) failed or was aborted before classification |
+| ~5 runs | GraphClust pipeline (experimental, never completed) |
+| 1 run | Typo in dataset name (`arxiv-fine` instead of `arxiv_fine`) |
+| ~3 runs | v3 runs where candidate count was too low (insufficient k₀) |
+
+### Configuration Errors
+
+| Run | Error |
+|-----|-------|
+| `v3_20260323_123115` (arxiv) | Used `k_star=102` (mtop's k) instead of 93 |
+| `v3_20260323_143714` (go_emotion) | Used `k_star=93` (arxiv's k) instead of 27 |
+
+### Run Variance
+
+SEAL-Clust v2 runs on `massive_scenario` show significant variance: ACC ranges from 0.421 to 0.680 across 19 completed runs. This is inherent to LLM-based label generation — different prompt batching and LLM sampling produce different candidate taxonomies.
+
+### Missing Metadata
+
+Early runs (pre-v3) do not have structured `metadata.json` or `sealclust_v3_metadata.json`. Pipeline version and parameters are inferred from directory naming conventions and log files.
+
+---
+
+## 8. Conclusions & Recommendations
+
+### What works
+
+1. **SEAL-Clust v2 is the closest to the paper** — best ACC=0.680 on `massive_scenario` (−5.4% gap to paper's 0.718). The gap is primarily due to using `gpt-4o-mini` instead of `gpt-3.5-turbo-0125`.
+
+2. **SEAL-Clust v3 excels on high-k intent datasets** — ACC=0.594 on `mtop_intent` (102 classes), outperforming v2 (0.577) and dramatically outperforming baselines (0.330).
+
+3. **Pure embedding baselines are surprisingly competitive** — KMeans with PCA=100 achieves the best non-paper results on `arxiv_fine` and `massive_intent`.
+
+4. **KMedoids is the most reliable v3 cluster method** — no ordering bug, consistent results, and the cluster medoids are actual documents (better LLM context than synthetic centroids).
+
+### What doesn't work
+
+1. **LLM label discovery on fine-grained academic topics** (arxiv: 93 narrow ArXiv categories). The LLM proposes overly broad labels that conflate related but distinct research areas.
+
+2. **All methods on emotion detection** (go_emotion). Emotion labels are inherently ambiguous and subjective.
+
+3. **Large k₀ without benefit**: k₀=2000 on an 18-class dataset produces 166 noisy candidates that consolidation cannot clean up effectively.
+
+### Recommended configurations
+
+| Dataset type | Recommended pipeline | Key params |
+|-------------|---------------------|------------|
+| Broad intent/scenario (k < 30) | SEAL-Clust v2 | Default prompts |
+| Many intents (k > 50) | SEAL-Clust v3 | kmedoids, k₀ ≈ 10×k, reps, none |
+| Fine-grained technical (k > 50) | Baseline KMeans | PCA=100 |
+| Emotion/affect | None reliable | All methods struggle |
+
+### Future work
+
+- [ ] Run SEAL-Clust v2 on remaining datasets (`mtop_intent`, `arxiv_fine`) for complete comparison
+- [ ] Test `gpt-4o-mini` vs `gpt-3.5-turbo-0125` on the same dataset to isolate model effects
+- [ ] Investigate few-shot consolidation prompts to improve k* accuracy on high-k datasets
+- [ ] Explore ensemble methods (embedding baseline + LLM relabeling)
+- [ ] Re-probe free Venice models (Llama 70B, Mistral 24B) for zero-cost comparison runs
