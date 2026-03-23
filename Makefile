@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate run-hybrid run-hybrid-full run-baseline-kmeans run-baseline-gmm run-graphclust run-graphclust-full
+.PHONY: help setup setup-conda lint branch release run-step0 run-step1 run-step2 run-step3 run-kmedoids run-kmedoids-classify run-kmedoids-propagate run-gmm run-gmm-classify run-gmm-propagate run-sealclust run-sealclust-classify run-sealclust-propagate run-hybrid run-hybrid-full run-baseline-kmeans run-baseline-gmm run-graphclust run-graphclust-full run-sealclust-v3 run-sealclust-v3-full run-sealclust-v3-classify run-sealclust-v3-propagate
 
 # ── Environment auto-detection ──────────────────────────────────────────
 # Priority: $(CONDA_PREFIX)/bin/ (if active) → .venv/bin/ → bare (system PATH)
@@ -109,6 +109,27 @@ help:
 	@echo "    make run-graphclust-full data=massive_scenario target_k=18"
 	@echo "    make run-graphclust-full data=massive_scenario knn=20 resolution=1.5"
 	@echo "    make run-graphclust data=massive_scenario"
+	@echo ""
+	@echo "  ── SEAL-Clust v3 (Modes Y/Z) ──"
+	@echo "  run-sealclust-v3 data=<d> [k0=300] [kstar=0] [kmethod=silhouette] [cluster_method=kmedoids]"
+	@echo "                                     Stages 1–7: embed + overcluster + labels + K* + consolidate"
+	@echo "                                     cluster_method: kmedoids (default) | gmm | kmeans"
+	@echo "                                     v3_reduction: none (default) | pca | tsne"
+	@echo "                                     label_source: all (default) | representatives"
+	@echo "  run-sealclust-v3-full data=<d> [k0=300] [kstar=0] [kmethod=silhouette] [cluster_method=kmedoids]"
+	@echo "                                     Stages 1–9 + evaluation in one command (Mode Z)"
+	@echo "  run-sealclust-v3-classify data=<d> run=<run_dir>"
+	@echo "                                     Stage 8: classify representatives via LLM"
+	@echo "  run-sealclust-v3-propagate data=<d> run=<run_dir>"
+	@echo "                                     Stage 9: propagate labels → full dataset"
+	@echo ""
+	@echo "  Example (SEAL-Clust v3, full end-to-end):"
+	@echo "    make run-sealclust-v3-full data=massive_scenario"
+	@echo "    make run-sealclust-v3-full data=massive_scenario kstar=18"
+	@echo "    make run-sealclust-v3-full data=massive_scenario cluster_method=gmm k0=200"
+	@echo "    make run-sealclust-v3-full data=massive_scenario v3_reduction=pca v3_pca_dims=50"
+	@echo "    make run-sealclust-v3-full data=massive_scenario label_source=representatives"
+	@echo "    make run-sealclust-v3 data=massive_scenario kstar=18"
 	@echo ""
 
 setup:
@@ -419,3 +440,70 @@ endif
 		--samples_per_community $(samples_per) \
 		$(if $(target_k),--target_k $(target_k),) \
 		2>&1 | tee logs/$(data)_graphclust_full.log
+
+# ── SEAL-Clust v3 (Modes Y/Z) ──────────────────────────────────────
+
+# usage: make run-sealclust-v3 data=massive_scenario
+#        make run-sealclust-v3 data=massive_scenario k0=200 kstar=18
+#        make run-sealclust-v3 data=massive_scenario cluster_method=gmm
+#        make run-sealclust-v3 data=massive_scenario reduction=pca pca_dims=50
+#        make run-sealclust-v3 data=massive_scenario label_source=representatives
+# Default: Stages 1–7 (Embed + Overcluster + Labels + K* + Consolidate)
+# No dimensionality reduction by default (raw 384D embeddings).
+cluster_method ?= kmedoids
+v3_classify_batch ?= 20
+v3_reduction ?= none
+v3_pca_dims ?= 50
+label_source ?= all
+run-sealclust-v3:
+ifndef data
+	$(error data is required, e.g. make run-sealclust-v3 data=massive_scenario)
+endif
+	mkdir -p logs
+	$(BIN)tc-sealclust-v3 --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) \
+		--cluster_method $(cluster_method) --reduction $(v3_reduction) \
+		$(if $(filter-out none,$(v3_reduction)),--pca_dims $(v3_pca_dims),) \
+		--label_source $(label_source) \
+		$(if $(reuse_labels),--reuse_labels,) \
+		2>&1 | tee logs/$(data)_sealclust_v3.log
+
+# usage: make run-sealclust-v3-full data=massive_scenario
+#        make run-sealclust-v3-full data=massive_scenario k0=300 kstar=18 cluster_method=gmm
+#        make run-sealclust-v3-full data=massive_scenario v3_reduction=pca v3_pca_dims=50
+# Runs the entire v3 pipeline end-to-end: Stages 1-9 + evaluation.
+run-sealclust-v3-full:
+ifndef data
+	$(error data is required, e.g. make run-sealclust-v3-full data=massive_scenario)
+endif
+	mkdir -p logs
+	$(BIN)tc-sealclust-v3 --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) \
+		--cluster_method $(cluster_method) --classify_batch_size $(v3_classify_batch) \
+		--reduction $(v3_reduction) \
+		$(if $(filter-out none,$(v3_reduction)),--pca_dims $(v3_pca_dims),) \
+		--label_source $(label_source) \
+		--full \
+		$(if $(reuse_labels),--reuse_labels,) \
+		2>&1 | tee logs/$(data)_sealclust_v3_full.log
+
+# usage: make run-sealclust-v3-classify data=massive_scenario run=./runs/<run_dir>
+run-sealclust-v3-classify:
+ifndef data
+	$(error data is required)
+endif
+ifndef run
+	$(error run is required, e.g. run=./runs/massive_scenario_small_v3_20260323_...)
+endif
+	mkdir -p logs
+	$(BIN)tc-sealclust-v3 --data $(data) --run_dir $(run) --classify \
+		--classify_batch_size $(v3_classify_batch) \
+		2>&1 | tee logs/$(data)_sealclust_v3_classify.log
+
+# usage: make run-sealclust-v3-propagate data=massive_scenario run=./runs/<run_dir>
+run-sealclust-v3-propagate:
+ifndef data
+	$(error data is required)
+endif
+ifndef run
+	$(error run is required, e.g. run=./runs/massive_scenario_small_v3_20260323_...)
+endif
+	$(BIN)tc-sealclust-v3 --data $(data) --run_dir $(run) --propagate
