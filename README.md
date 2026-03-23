@@ -451,12 +451,94 @@ make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
 
 ---
 
+### Modes Y/Z — SEAL-Clust v3 (Multi-Method + One-Word Labels)
+
+SEAL-Clust v3 is an improved version of the SEAL-Clust framework with:
+
+- **Multiple clustering backends**: K-Medoids (default), GMM, or KMeans
+- **One-word label constraint**: Labels are single general category words (e.g. "travel", "finance")
+- **Iterative chunked consolidation**: Handles 500+ candidate labels reliably
+- **Batched representative classification**: Classify multiple docs per LLM call (20× default)
+- **Flexible representative selection**: Medoids for K-Medoids; closest-to-centroid for GMM/KMeans
+
+**v3 Architecture (9 Stages):**
+
+```
+Stage 1: Embed documents (sentence-transformers)
+Stage 2: PCA dimensionality reduction
+Stage 3: Overclustering (K₀ clusters via kmedoids/gmm/kmeans)
+Stage 4: Select representative per cluster
+Stage 5: LLM label discovery (one-word labels)
+Stage 6: K* estimation (manual or automatic)
+Stage 7: LLM label consolidation (iterative merge → K* labels)
+Stage 8: LLM representative classification (batched)
+Stage 9: Label propagation (rep → all documents)
+```
+
+**Mode Z — Full Pipeline** (all 9 stages + evaluation):
+
+```bash
+# Full end-to-end with default K-Medoids
+tc-sealclust-v3 --data massive_scenario --k0 300 --full
+
+# With manual K*
+tc-sealclust-v3 --data massive_scenario --k0 300 --k_star 18 --full
+
+# Using GMM clustering
+tc-sealclust-v3 --data massive_scenario --k0 300 --cluster_method gmm --full
+
+# Using KMeans
+tc-sealclust-v3 --data massive_scenario --k0 300 --cluster_method kmeans --full
+
+# Using Make
+make run-sealclust-v3-full data=massive_scenario
+make run-sealclust-v3-full data=massive_scenario kstar=18 cluster_method=gmm
+```
+
+**Mode Y — Step-by-Step** (run stages separately):
+
+```bash
+# Stages 1–7: embed + cluster + discover labels + consolidate
+tc-sealclust-v3 --data massive_scenario --k0 300 --k_star 18
+
+# Stage 8: classify representatives
+tc-sealclust-v3 --data massive_scenario --run_dir ./runs/<dir> --classify
+
+# Stage 9: propagate labels
+tc-sealclust-v3 --data massive_scenario --run_dir ./runs/<dir> --propagate
+
+# Evaluate
+tc-evaluate --data massive_scenario --run_dir ./runs/<dir>
+
+# Using Make
+make run-sealclust-v3 data=massive_scenario kstar=18
+make run-sealclust-v3-classify data=massive_scenario run=./runs/<dir>
+make run-sealclust-v3-propagate data=massive_scenario run=./runs/<dir>
+```
+
+**v2 vs v3 Comparison:**
+
+| Feature | v2 (Mode D/E) | v3 (Mode Y/Z) |
+|---------|---------------|----------------|
+| Clustering | K-Medoids only | K-Medoids / GMM / KMeans |
+| Labels | 2–5 word phrases | One word (general) |
+| Consolidation | Single-pass merge | Iterative chunked merge |
+| Classification | One doc per LLM call | Batched (20 per call) |
+| Stage 8 | Shared `tc-classify` | Built-in batched classification |
+| CLI | `tc-sealclust` | `tc-sealclust-v3` |
+
+**Cost**: ~K₀/30 + K₀/20 LLM calls (label discovery + classification) · **Time**: 5–15min
+
+---
+
 ### Mode Quick Reference
 
 | Scenario | Mode | Command |
 |----------|------|---------|
 | **One command, full automation** ⭐ | E | `tc-sealclust --data X --k0 300 --full` |
 | **One command, known K\*** ⭐ | E | `tc-sealclust --data X --k0 300 --k_star N --full` |
+| **v3: multi-method + one-word labels** | Z | `tc-sealclust-v3 --data X --k0 300 --full` |
+| **v3: GMM clustering backend** | Z | `tc-sealclust-v3 --data X --cluster_method gmm --full` |
 | **Hybrid: LLM + embedding K-opt** | F | `tc-hybrid --data X --full` |
 | **Graph community clustering** | H | `tc-graphclust --data X --target_k N --full` |
 | **Baseline: no LLM benchmark** | G | `tc-baseline --data X --method kmeans --k N` |
@@ -515,6 +597,13 @@ make run-baseline-kmeans data=massive_scenario auto_k=1 k_min=5 k_max=30
 make run-graphclust-full data=massive_scenario target_k=18
 make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
 make run-graphclust data=massive_scenario
+
+# ── SEAL-Clust v3 (Mode Z) ──
+make run-sealclust-v3-full data=massive_scenario
+make run-sealclust-v3-full data=massive_scenario kstar=18 cluster_method=gmm
+make run-sealclust-v3 data=massive_scenario kstar=18
+make run-sealclust-v3-classify data=massive_scenario run=./runs/<run_dir>
+make run-sealclust-v3-propagate data=massive_scenario run=./runs/<run_dir>
 ```
 
 | Variable | Default | Description |
@@ -536,6 +625,8 @@ make run-graphclust data=massive_scenario
 | `min_sim` | `0.3` | Graph clustering: min cosine similarity |
 | `resolution` | `1.0` | Graph clustering: Louvain resolution |
 | `target_k` | — | Graph clustering / Hybrid: target K |
+| `cluster_method` | `kmedoids` | SEAL-Clust v3: clustering backend (`kmedoids` / `gmm` / `kmeans`) |
+| `v3_classify_batch` | `20` | SEAL-Clust v3: representatives per classification call |
 
 ---
 
@@ -560,6 +651,27 @@ make run-graphclust data=massive_scenario
 | `--embedding_model M` | str | `all-MiniLM-L6-v2` | Sentence-transformers model |
 | `--label_chunk_size N` | int | `30` | Docs per LLM label-discovery call |
 | `--batch_size N` | int | `64` | Embedding batch size |
+| `--seed N` | int | `42` | Random seed |
+
+### `tc-sealclust-v3` — SEAL-Clust v3 Pipeline (Modes Y/Z)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--data NAME` | str | `massive_scenario` | Dataset name |
+| `--full` | flag | — | Run all 9 stages + evaluation (Mode Z) |
+| `--classify` | flag | — | Run Stage 8 only (requires `--run_dir`) |
+| `--propagate` | flag | — | Run Stage 9 only (requires `--run_dir`) |
+| `--k0 N` | int | `300` | Overclustering size K₀ |
+| `--k_star N` | int | `0` | Manual K\* (`0` = auto-estimate) |
+| `--k_method M` | str | `silhouette` | `silhouette` / `calinski` / `bic` / `ensemble` |
+| `--cluster_method M` | str | `kmedoids` | `kmedoids` / `gmm` / `kmeans` |
+| `--classify_batch_size N` | int | `20` | Representatives per LLM classification call |
+| `--pca_dims N` | int | `50` | PCA output dimensions |
+| `--run_dir PATH` | str | — | Existing run directory |
+| `--use_large` | flag | — | Use `large.jsonl` split |
+| `--embedding_model M` | str | `all-MiniLM-L6-v2` | Sentence-transformers model |
+| `--label_chunk_size N` | int | `30` | Docs per LLM label-discovery call |
+| `--reuse_labels` | flag | — | Enable label cache reuse |
 | `--seed N` | int | `42` | Random seed |
 
 ### `tc-kmedoids` — K-Medoids Pre-Clustering (Mode B)

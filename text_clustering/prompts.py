@@ -50,6 +50,12 @@ def prompt_construct_merge_label(label_list, target_k: int | None = None):
         )
     prompt += f"Here is the list of labels for analysis and simplification: {label_list}.\n"
     prompt += f"Produce the final, simplified list in a flat, JSON-formatted structure without any substructures or hierarchical categorization like: {json_example}"
+    prompt += (
+    "\nReturn ONLY valid JSON. Do not include any explanation, text, or markdown.\n"
+    "The output MUST be strictly valid JSON.\n"
+    "Format exactly like this:\n"
+    '{"merged_labels": ["label1", "label2", "..."]}\n'
+    )
     return prompt
 
 
@@ -262,5 +268,109 @@ def prompt_consolidate_labels(label_list: list[str], target_k: int) -> str:
         f"- Do NOT use generic labels like 'other' or 'miscellaneous'.\n\n"
         f"Candidate labels:\n{label_list}\n\n"
         f"Return exactly {target_k} merged labels in JSON format like: {json_example}"
+    )
+    return prompt
+
+
+# ---------------------------------------------------------------------------
+# SEAL-Clust v3 prompts
+# ---------------------------------------------------------------------------
+
+def prompt_v3_discover_labels(representative_texts: list[str]) -> str:
+    """Stage 5 — v3 Label Discovery (one-word, general labels).
+
+    Unlike v2 which allows 2-5 word phrases, v3 enforces strict ONE WORD
+    labels that are GENERAL category descriptors (e.g. "Technology", "Sports").
+    """
+    json_example = {"labels": ["Technology", "Sports", "Finance", "Health"]}
+    prompt = (
+        "You are an expert text analyst. Below are representative documents sampled "
+        "from a large text dataset. Each document represents a cluster of similar texts.\n\n"
+        "Your task is to read all these documents and propose a list of meaningful "
+        "topic labels that capture the main themes present in the data.\n\n"
+        "STRICT RULES:\n"
+        "1. Each label MUST be exactly ONE WORD.\n"
+        "2. Labels must be GENERAL category descriptors (broad categories, not specific topics).\n"
+        "3. Reuse the same label for documents that belong to the same category.\n"
+        "4. Do NOT use generic labels like 'Other', 'Miscellaneous', or 'Unknown'.\n"
+        "5. Cover all themes — propose too many rather than too few.\n\n"
+        "Documents:\n"
+    )
+    for i, text in enumerate(representative_texts, 1):
+        prompt += f"{i}. {text}\n"
+    prompt += (
+        f"\nReturn the complete list of proposed ONE-WORD labels in JSON format like: {json_example}\n"
+        "Return ONLY valid JSON. No explanation, no markdown."
+    )
+    return prompt
+
+
+def prompt_v3_consolidate_labels(label_list: list[str], target_k: int) -> str:
+    """Stage 7 — v3 Label Consolidation (strict K*).
+
+    Merge candidate one-word labels into exactly K* final labels.
+    Uses aggressive language to enforce the exact count.
+    """
+    json_example = {"merged_labels": ["Technology", "Sports", "Finance"]}
+    prompt = (
+        f"You are a label-merging machine. You have {len(label_list)} candidate labels "
+        f"and MUST merge them into EXACTLY {target_k} final labels.\n\n"
+        f"RULES:\n"
+        f"1. You MUST return EXACTLY {target_k} labels — not more, not fewer.\n"
+        f"2. Each label MUST be exactly ONE WORD.\n"
+        f"3. Merge aggressively — combine anything related into a single broad label.\n"
+        f"4. Every original label must fit under one of your merged labels.\n"
+        f"5. Do NOT use 'Other', 'Miscellaneous', or 'Unknown'.\n\n"
+        f"Candidate labels:\n{label_list}\n\n"
+        f"Return EXACTLY {target_k} merged ONE-WORD labels in JSON format like: {json_example}\n"
+        f"Return ONLY valid JSON. No explanation, no markdown."
+    )
+    return prompt
+
+
+def prompt_v3_classify_representative(
+    label_list: list[str], document: str,
+) -> str:
+    """Stage 8 — v3 Representative Classification (single doc).
+
+    Assign exactly one label from the final set to a representative document.
+    """
+    json_example = {"label": "Technology"}
+    prompt = (
+        "You are an expert text classifier. Assign exactly one label from the "
+        "list below to the given document.\n\n"
+        f"Available labels: {label_list}\n\n"
+        f"Document: {document}\n\n"
+        "Rules:\n"
+        "- You MUST choose a label from the list above — no other label is allowed.\n"
+        "- Pick the label that best describes the document's main topic.\n"
+        f"- Return in JSON format like: {json_example}\n"
+        "Return ONLY valid JSON. No explanation, no markdown."
+    )
+    return prompt
+
+
+def prompt_v3_classify_representatives_batch(
+    label_list: list[str], documents: list[str],
+) -> str:
+    """Stage 8 — v3 Batched Representative Classification.
+
+    Classify multiple representative documents into K* labels in one call.
+    """
+    json_example = {"1": "Technology", "2": "Sports", "3": "Finance"}
+    prompt = (
+        "You are an expert text classifier. Assign exactly one label from the list below "
+        "to EACH of the following documents.\n\n"
+        f"Available labels: {label_list}\n\n"
+        "Documents:\n"
+    )
+    for i, doc in enumerate(documents, 1):
+        prompt += f"{i}. {doc}\n"
+    prompt += (
+        f"\nRules:\n"
+        f"- You MUST choose a label from the list above for each document.\n"
+        f"- You MUST classify ALL {len(documents)} documents.\n"
+        f"- Return a JSON object mapping each document number to its label like: {json_example}\n"
+        f"Return ONLY valid JSON. No explanation, no markdown."
     )
     return prompt
