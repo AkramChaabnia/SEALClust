@@ -405,6 +405,52 @@ def _run_discovery_pass(
 # Stage 7 — Label Consolidation (iterative chunked merge)
 # ---------------------------------------------------------------------------
 
+def _trim_labels_by_similarity(
+    labels: list[str],
+    k_star: int,
+) -> list[str]:
+    """Deterministically trim *labels* to exactly *k_star* by repeatedly
+    merging the most similar pair (by embedding cosine similarity).
+
+    When two labels are merged, the shorter (more general) label is kept.
+    If lengths are equal, we keep the one that comes first alphabetically.
+    """
+    from sentence_transformers import SentenceTransformer
+
+    from text_clustering.config import EMBEDDING_MODEL
+
+    if len(labels) <= k_star:
+        return labels
+
+    model = SentenceTransformer(EMBEDDING_MODEL)
+    embeddings = model.encode(labels, convert_to_numpy=True, show_progress_bar=False)
+    from sklearn.metrics.pairwise import cosine_similarity as cos_sim
+
+    current = list(labels)
+    embs = embeddings.copy()
+
+    while len(current) > k_star:
+        sim = cos_sim(embs)
+        # Zero out the diagonal so we don't pick self-similarity
+        np.fill_diagonal(sim, -1.0)
+        # Find the most similar pair
+        flat_idx = int(np.argmax(sim))
+        i, j = divmod(flat_idx, sim.shape[1])
+        # Keep the shorter / alphabetically-first label
+        a, b = current[i], current[j]
+        keep = a if (len(a) < len(b) or (len(a) == len(b) and a <= b)) else b
+        drop_idx = j if keep == a else i
+        logger.debug(
+            "    trim: merge '%s' + '%s' → keep '%s' (sim=%.3f)",
+            a, b, keep, sim[i, j],
+        )
+        # Remove the dropped label
+        current.pop(drop_idx)
+        embs = np.delete(embs, drop_idx, axis=0)
+
+    return current
+
+
 def consolidate_labels_v3(
     candidate_labels: list[str],
     k_star: int,
@@ -416,6 +462,9 @@ def consolidate_labels_v3(
 
     Uses iterative chunked merging for robustness when there are hundreds
     of candidate labels (same strategy as tools/remerge_labels.py).
+
+    After the LLM merge attempts, applies a deterministic post-processing
+    step using embedding-based similarity to guarantee exactly K* labels.
 
     Parameters
     ----------
@@ -429,7 +478,7 @@ def consolidate_labels_v3(
     Returns
     -------
     list[str]
-        Approximately K* merged labels (best effort).
+        Exactly K* merged labels (guaranteed by embedding-based trimming).
     """
     from text_clustering.llm import chat
     from text_clustering.prompts import prompt_v3_consolidate_labels
@@ -455,29 +504,44 @@ def consolidate_labels_v3(
             )
             best = current
             best_dist = abs(len(current) - k_star)
-            for attempt in range(1, 4):
-                prompt = prompt_v3_consolidate_labels(current, k_star)
+            # Track cumulative overshoot to compensate in subsequent attempts
+            cumulative_overshoot = 0
+            max_attempts = 8
+            for attempt in range(1, max_attempts + 1):
+                # Adaptive target: if LLM consistently overshoots, ask for
+                # fewer labels to compensate
+                adjusted_target = max(
+                    3, k_star - cumulative_overshoot // 2,
+                )
+                prompt = prompt_v3_consolidate_labels(current, adjusted_target)
                 raw = chat(prompt, client, max_tokens=4096)
                 parsed = _safe_parse_labels(raw)
                 if parsed and len(parsed) < len(current):
                     dist = abs(len(parsed) - k_star)
+                    overshoot = len(parsed) - k_star
                     logger.info(
-                        "    attempt %d: %d labels (off by %d)",
-                        attempt, len(parsed), dist,
+                        "    attempt %d (asked %d): got %d labels (off by %d)",
+                        attempt, adjusted_target, len(parsed), dist,
                     )
                     if dist < best_dist:
                         best = parsed
                         best_dist = dist
                     if dist == 0:
                         break
+                    # Update cumulative overshoot for next attempt
+                    if overshoot > 0:
+                        cumulative_overshoot += overshoot
                 else:
                     logger.info("    attempt %d: parse failed or no reduction", attempt)
+                # Stop early if we already found an exact match
+                if best_dist == 0:
+                    break
             current = best
             break
 
         # Chunked aggressive reduction
         n_chunks = math.ceil(n / chunk_size)
-        per_chunk_target = max(3, int(k_star * 1.3) // n_chunks)
+        per_chunk_target = max(3, int(k_star * 1.1) // n_chunks)
         merged_round: list[str] = []
 
         logger.info(
@@ -507,6 +571,22 @@ def consolidate_labels_v3(
         if len(current) >= n:
             logger.warning("  No reduction in round %d — stopping", round_num)
             break
+
+    # ── Deterministic post-processing: guarantee exactly K* ──
+    n_after_llm = len(current)
+    if n_after_llm > k_star:
+        logger.info(
+            "Stage 7 (v3): LLM produced %d labels (target %d) — "
+            "trimming %d excess labels by embedding similarity",
+            n_after_llm, k_star, n_after_llm - k_star,
+        )
+        current = _trim_labels_by_similarity(current, k_star)
+    elif n_after_llm < k_star:
+        logger.warning(
+            "Stage 7 (v3): LLM produced only %d labels (target %d) — "
+            "cannot add labels without context, returning %d",
+            n_after_llm, k_star, n_after_llm,
+        )
 
     logger.info(
         "Stage 7 (v3): Final label count: %d (target was %d)",

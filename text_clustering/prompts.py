@@ -311,19 +311,26 @@ def prompt_v3_consolidate_labels(label_list: list[str], target_k: int) -> str:
     Merge candidate one-word labels into exactly K* final labels.
     Uses aggressive language to enforce the exact count.
     """
-    json_example = {"merged_labels": ["Technology", "Sports", "Finance"]}
+    json_example = {"merged_labels": ["Label1", "Label2", "Label3"]}
     prompt = (
-        f"You are a label-merging machine. You have {len(label_list)} candidate labels "
-        f"and MUST merge them into EXACTLY {target_k} final labels.\n\n"
+        f"You are a label-merging machine.\n\n"
+        f"INPUT: {len(label_list)} candidate labels.\n"
+        f"OUTPUT: exactly {target_k} merged labels.\n\n"
+        f"ABSOLUTE CONSTRAINT: Your output list MUST contain EXACTLY "
+        f"{target_k} items. Count them carefully before responding. "
+        f"Returning {target_k + 1} or {target_k - 1} is WRONG.\n\n"
         f"RULES:\n"
-        f"1. You MUST return EXACTLY {target_k} labels — not more, not fewer.\n"
+        f"1. Return a JSON list with EXACTLY {target_k} labels.\n"
         f"2. Each label MUST be exactly ONE WORD.\n"
-        f"3. Merge aggressively — combine anything related into a single broad label.\n"
+        f"3. Merge aggressively — combine anything semantically related "
+        f"into a single broad label.\n"
         f"4. Every original label must fit under one of your merged labels.\n"
         f"5. Do NOT use 'Other', 'Miscellaneous', or 'Unknown'.\n\n"
         f"Candidate labels:\n{label_list}\n\n"
-        f"Return EXACTLY {target_k} merged ONE-WORD labels in JSON format like: {json_example}\n"
-        f"Return ONLY valid JSON. No explanation, no markdown."
+        f"Return EXACTLY {target_k} merged ONE-WORD labels in JSON format "
+        f"like: {json_example}\n"
+        f"Return ONLY valid JSON. No explanation, no markdown. "
+        f"VERIFY: count your output — it must be {target_k}."
     )
     return prompt
 
