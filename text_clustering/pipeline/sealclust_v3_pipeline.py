@@ -463,7 +463,10 @@ def classify_reps(args) -> None:
 
     # Save as classifications.json (compatible with tc-evaluate)
     data_list = load_dataset(args.data_path, args.data, args.use_large)
-    rep_indices = sorted(meta["representative_indices"])
+    # IMPORTANT: use the original order from metadata (cluster_id order for
+    # GMM/KMeans, sorted-doc-index for K-Medoids).  This matches the order
+    # of rep_texts loaded from representative_documents.jsonl.
+    rep_indices = meta["representative_indices"]
 
     classifications: dict[str, list[str]] = {}
     for order, rep_idx in enumerate(rep_indices):
@@ -495,7 +498,8 @@ def propagate(args) -> None:
         meta = json.load(f)
 
     cluster_assignments = np.array(meta["cluster_assignments"])
-    rep_indices = sorted(meta["representative_indices"])
+    # IMPORTANT: preserve original order (cluster_id order for GMM/KMeans).
+    rep_indices = meta["representative_indices"]
     n_documents = meta["n_documents"]
 
     # Load dataset
@@ -517,7 +521,7 @@ def propagate(args) -> None:
         for sentence in sentences:
             if sentence in rep_text_to_idx:
                 rep_idx = rep_text_to_idx[sentence]
-                # Find order in sorted rep_indices
+                # Find order in rep_indices (original metadata order)
                 order = rep_indices.index(rep_idx)
                 rep_labels[order] = label
 

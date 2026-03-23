@@ -644,9 +644,13 @@ def propagate_labels_v3(
     Parameters
     ----------
     rep_labels : dict[int, str]
-        Mapping from rep_index → label (from Stage 8).
+        Mapping from rep_order → label (from Stage 8).
+        ``rep_order`` is the positional index in the rep_indices list
+        (which matches the order of rep_texts fed to Stage 8).
     rep_indices : list[int]
-        Indices of representative documents (from Stage 4).
+        Indices of representative documents in **original order** from
+        Stage 4 (cluster-id order for GMM/KMeans, sorted-doc-index for
+        K-Medoids).  Must NOT be re-sorted.
     cluster_assignments : np.ndarray
         Shape ``(n_documents,)`` — cluster id for each document.
     n_documents : int
@@ -657,8 +661,10 @@ def propagate_labels_v3(
         Label for each document.
     """
     # Build cluster_id → label
+    # rep_indices is in the same order as rep_texts that were classified,
+    # so rep_labels[i] corresponds to rep_indices[i].
     cluster_to_label: dict[int, str] = {}
-    for rep_order, rep_idx in enumerate(sorted(rep_indices)):
+    for rep_order, rep_idx in enumerate(rep_indices):
         cid = int(cluster_assignments[rep_idx])
         label = rep_labels.get(rep_order, "Unsuccessful")
         cluster_to_label[cid] = label
