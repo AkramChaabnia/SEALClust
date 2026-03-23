@@ -54,7 +54,7 @@ One command runs the entire pipeline end-to-end: embedding → clustering → LL
 
 - Python 3.12+
 - [conda](https://docs.conda.io/) (recommended) or `venv`
-- An API key for OpenAI or [OpenRouter](https://openrouter.ai)
+- An API key for [OpenAI](https://platform.openai.com/) or [OpenRouter](https://openrouter.ai)
 
 ### Installation
 
@@ -173,37 +173,89 @@ All datasets are under `./datasets/<name>/` with `small.jsonl` and `large.jsonl`
 
 ## 5. Usage — All Pipeline Modes
 
-### Mode E — SEAL-Clust v2 Full Pipeline ⭐ RECOMMENDED
+### Mode A — Original Pipeline (No Pre-Clustering)
 
-Single `--full` command runs all 9 stages + evaluation.
+The paper's method. Most expensive but highest quality with strong models.
 
 ```bash
-# Auto K* (algorithm estimates the number of clusters)
-tc-sealclust --data massive_scenario --k0 300 --full
+# Step 0: Seed labels (run once)
+tc-seed-labels
 
-# Manual K* (you know the ground-truth K)
-tc-sealclust --data massive_scenario --k0 300 --k_star 18 --full
+# Step 1: Label generation (~200 LLM calls)
+tc-label-gen --data massive_scenario
+# ⚠️ COPY THE PRINTED RUN DIR
+# or if you have the selected number k
+tc-label-gen --data massive_scenario --target_k 18
 
-# Try different K* estimation methods
-tc-sealclust --data massive_scenario --k0 300 --k_method ensemble --full
+# Step 2: Classification (~2,974 LLM calls — one per document)
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
+
+# Step 2 (optimised): Batched classification (~298 LLM calls with batch_size=10)
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --batch_size 10
+
+# Step 3: Evaluation
+tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 ```
 
-**Cost**: ~310 LLM calls · **Time**: ~10 min · **Expected ACC**: ~56% (K\*=18, PCA 50D)
-
-> **💡 Tip**: For best accuracy, set `--k_star` to the ground-truth number of classes.
-> All automated K\* methods tend to under-estimate.
-
-#### K\* Estimation Methods
-
-| Method | Flag | Description |
-|--------|------|-------------|
-| **Silhouette-elbow** | `--k_method silhouette` | Elbow detection on silhouette curve (default) |
-| **Calinski-Harabasz** | `--k_method calinski` | Peaks at optimal K via variance ratio |
-| **BIC** | `--k_method bic` | GMM + Bayesian Information Criterion |
-| **Ensemble** | `--k_method ensemble` | Median of all three (most robust) |
+**Cost**: ~3,000 LLM calls (unbatched) or ~500 (batched, `--batch_size 10`) · **Time**: 1–3h (unbatched) or ~20min (batched)
 
 ---
 
+### Mode B — K-Medoids Pre-Clustering
+
+K-Medoids on raw 384D embeddings. Medoids are actual documents from the dataset.
+
+```bash
+# Step 1: Embed + K-Medoids (~10–40s, no LLM)
+tc-kmedoids --data massive_scenario --kmedoids_k 100
+# ⚠️ COPY THE PRINTED RUN DIR
+
+# Step 2: Label generation
+tc-label-gen --data massive_scenario --run_dir ./runs/<run_dir>
+# (Optional) Re-merge: conda run -n ppd python tools/remerge_labels.py ./runs/<run_dir> 18
+
+# Step 3: Classify medoids only (~100 LLM calls)
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --medoid_mode
+
+# Step 4: Propagate → full dataset
+tc-kmedoids --data massive_scenario --run_dir ./runs/<run_dir> --propagate
+
+# Step 5: Evaluate
+tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
+```
+
+**Cost**: ~300 LLM calls · **Time**: 5–15 min 
+
+---
+
+### Mode C — GMM Pre-Clustering
+
+GMM on L2-normalised 384D embeddings with soft (probabilistic) assignments.
+
+```bash
+# Step 1: Embed + GMM (~20–40s, no LLM)
+tc-gmm --data massive_scenario --gmm_k 100
+# (Alternative) Auto-select k: tc-gmm --gmm_k 0 --gmm_k_min 10 --gmm_k_max 200 --selection_criterion bic
+# ⚠️ COPY THE PRINTED RUN DIR
+
+# Step 2: Label generation
+tc-label-gen --data massive_scenario --run_dir ./runs/<run_dir>
+
+# Step 3: Classify representatives (~100 LLM calls)
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --representative_mode
+
+# Step 4: Propagate
+tc-gmm --data massive_scenario --run_dir ./runs/<run_dir> --propagate
+# OR soft propagation:
+tc-gmm --data massive_scenario --run_dir ./runs/<run_dir> --propagate --soft --confidence_threshold 0.4
+
+# Step 5: Evaluate
+tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
+```
+
+**Cost**: ~300 LLM calls · **Time**: 5–15 min 
+
+---
 ### Mode D — SEAL-Clust v2 Step-by-Step
 
 Run Stages 1–7, inspect intermediate results, then complete the pipeline.
@@ -218,96 +270,44 @@ cat ./runs/<run_dir>/labels_proposed.json | python3 -m json.tool
 cat ./runs/<run_dir>/labels_merged.json | python3 -m json.tool
 
 # Stage 8: Classify representatives (~300 LLM calls)
-conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --medoid_mode
+tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --medoid_mode
 
 # Stage 9: Propagate labels → full dataset
-conda run -n ppd tc-sealclust --data massive_scenario --run_dir ./runs/<run_dir> --propagate
+tc-sealclust --data massive_scenario --run_dir ./runs/<run_dir> --propagate
 
 # Evaluate
-conda run -n ppd tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
+tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 ```
+> **💡 Tip**: For best accuracy, set `--k_star` to the ground-truth number of classes.
+> All automated K\* methods tend to under-estimate.
+
+#### K\* Estimation Methods
+
+| Method | Flag | Description |
+|--------|------|-------------|
+| **Silhouette-elbow** | `--k_method silhouette` | Elbow detection on silhouette curve (default) |
+| **Calinski-Harabasz** | `--k_method calinski` | Peaks at optimal K via variance ratio |
+| **BIC** | `--k_method bic` | GMM + Bayesian Information Criterion |
+| **Ensemble** | `--k_method ensemble` | Median of all three (most robust) |
 
 ---
 
-### Mode A — Original Pipeline (No Pre-Clustering)
+### Mode E — SEAL-Clust v2 Full Pipeline 
 
-The paper's method. Most expensive but highest quality with strong models.
-
-```bash
-# Step 0: Seed labels (run once)
-conda run -n ppd tc-seed-labels
-
-# Step 1: Label generation (~200 LLM calls)
-conda run -n ppd tc-label-gen --data massive_scenario
-# ⚠️ COPY THE PRINTED RUN DIR
-
-# Step 2: Classification (~2,974 LLM calls — one per document)
-conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir>
-
-# Step 2 (optimised): Batched classification (~298 LLM calls with batch_size=10)
-conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --batch_size 10
-
-# Step 3: Evaluation
-conda run -n ppd tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
-```
-
-**Cost**: ~3,000 LLM calls (unbatched) or ~500 (batched, `--batch_size 10`) · **Time**: 1–3h (unbatched) or ~20min (batched)
-
----
-
-### Mode B — K-Medoids Pre-Clustering
-
-K-Medoids on raw 384D embeddings. Medoids are actual documents from the dataset.
+Single `--full` command runs all 9 stages + evaluation.
 
 ```bash
-# Step 1: Embed + K-Medoids (~10–40s, no LLM)
-conda run -n ppd tc-kmedoids --data massive_scenario --kmedoids_k 100
-# ⚠️ COPY THE PRINTED RUN DIR
+# Auto K* (algorithm estimates the number of clusters)
+tc-sealclust --data massive_scenario --k0 300 --full
 
-# Step 2: Label generation
-conda run -n ppd tc-label-gen --data massive_scenario --run_dir ./runs/<run_dir>
-# (Optional) Re-merge: conda run -n ppd python tools/remerge_labels.py ./runs/<run_dir> 18
+# Manual K* (you know the ground-truth K)
+tc-sealclust --data massive_scenario --k0 300 --k_star 18 --full
 
-# Step 3: Classify medoids only (~100 LLM calls)
-conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --medoid_mode
-
-# Step 4: Propagate → full dataset
-conda run -n ppd tc-kmedoids --data massive_scenario --run_dir ./runs/<run_dir> --propagate
-
-# Step 5: Evaluate
-conda run -n ppd tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
+# Try different K* estimation methods
+tc-sealclust --data massive_scenario --k0 300 --k_method ensemble --full
 ```
 
-**Cost**: ~300 LLM calls · **Time**: 5–15 min · **Expected ACC**: ~55%
-
----
-
-### Mode C — GMM Pre-Clustering
-
-GMM on L2-normalised 384D embeddings with soft (probabilistic) assignments.
-
-```bash
-# Step 1: Embed + GMM (~20–40s, no LLM)
-conda run -n ppd tc-gmm --data massive_scenario --gmm_k 100
-# (Alternative) Auto-select k: tc-gmm --gmm_k 0 --gmm_k_min 10 --gmm_k_max 200 --selection_criterion bic
-# ⚠️ COPY THE PRINTED RUN DIR
-
-# Step 2: Label generation
-conda run -n ppd tc-label-gen --data massive_scenario --run_dir ./runs/<run_dir>
-
-# Step 3: Classify representatives (~100 LLM calls)
-conda run -n ppd tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --representative_mode
-
-# Step 4: Propagate
-conda run -n ppd tc-gmm --data massive_scenario --run_dir ./runs/<run_dir> --propagate
-# OR soft propagation:
-conda run -n ppd tc-gmm --data massive_scenario --run_dir ./runs/<run_dir> --propagate --soft --confidence_threshold 0.4
-
-# Step 5: Evaluate
-conda run -n ppd tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
-```
-
-**Cost**: ~300 LLM calls · **Time**: 5–15 min · **Expected ACC**: ~54%
+**Cost**: ~310 LLM calls · **Time**: ~10 min · 
 
 ---
 
@@ -449,21 +449,117 @@ make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
 
 ---
 
+### Modes Y/Z — SEAL-Clust v3 (Multi-Method + One-Word Labels)
+
+SEAL-Clust v3 is an improved version of the SEAL-Clust framework with:
+
+- **Multiple clustering backends**: K-Medoids (default), GMM, or KMeans
+- **No default dimensionality reduction**: Clusters on raw 384D embeddings by default; optionally `--reduction pca` or `--reduction tsne`
+- **Label discovery from ALL documents**: Sends all documents (not just representatives) to the LLM in chunks for better label coverage
+- **Configurable label source**: `--label_source all` (default, all documents) or `--label_source representatives` (only K₀ rep docs — faster, fewer LLM calls)
+- **One-word label constraint**: Labels are single general category words (e.g. "travel", "finance")
+- **Iterative chunked consolidation**: Handles 500+ candidate labels reliably
+- **Retry-based label discovery**: If fewer labels than K* are discovered, retries with reshuffled chunks
+- **Batched representative classification**: Classify multiple docs per LLM call (20× default)
+- **Flexible representative selection**: Medoids for K-Medoids; closest-to-centroid for GMM/KMeans
+
+**v3 Architecture (9 Stages):**
+
+```
+Stage 1: Embed documents (sentence-transformers)
+Stage 2: Dimensionality reduction (optional — none by default)
+Stage 3: Overclustering (K₀ clusters via kmedoids/gmm/kmeans)
+Stage 4: Select representative per cluster
+Stage 5: LLM label discovery (one-word labels, chunked — all docs or reps only)
+Stage 6: K* estimation (manual or automatic)
+Stage 7: LLM label consolidation (iterative merge → K* labels)
+Stage 8: LLM representative classification (batched)
+Stage 9: Label propagation (rep → all documents)
+```
+
+**Mode Z — Full Pipeline ⭐ RECOMMENDED** (all 9 stages + evaluation):
+
+```bash
+# Full end-to-end with default K-Medoids
+tc-sealclust-v3 --data massive_scenario --k0 300 --full
+
+# With manual K*
+tc-sealclust-v3 --data massive_scenario --k0 300 --k_star 18 --full
+
+# Using GMM clustering
+tc-sealclust-v3 --data massive_scenario --k0 300 --cluster_method gmm --full
+
+# Using KMeans
+tc-sealclust-v3 --data massive_scenario --k0 300 --cluster_method kmeans --full
+
+# With PCA dimensionality reduction
+tc-sealclust-v3 --data massive_scenario --k0 300 --reduction pca --full
+
+# Label discovery from representatives only (faster)
+tc-sealclust-v3 --data massive_scenario --k0 300 --label_source representatives --full
+
+# Using Make
+make run-sealclust-v3-full data=massive_scenario
+make run-sealclust-v3-full data=massive_scenario kstar=18 cluster_method=gmm
+make run-sealclust-v3-full data=massive_scenario reduction=pca
+make run-sealclust-v3-full data=massive_scenario label_source=representatives
+```
+
+**Mode Y — Step-by-Step** (run stages separately):
+
+```bash
+# Stages 1–7: embed + cluster + discover labels + consolidate
+tc-sealclust-v3 --data massive_scenario --k0 300 --k_star 18
+
+# Stage 8: classify representatives
+tc-sealclust-v3 --data massive_scenario --run_dir ./runs/<dir> --classify
+
+# Stage 9: propagate labels
+tc-sealclust-v3 --data massive_scenario --run_dir ./runs/<dir> --propagate
+
+# Evaluate
+tc-evaluate --data massive_scenario --run_dir ./runs/<dir>
+
+# Using Make
+make run-sealclust-v3 data=massive_scenario kstar=18
+make run-sealclust-v3-classify data=massive_scenario run=./runs/<dir>
+make run-sealclust-v3-propagate data=massive_scenario run=./runs/<dir>
+```
+
+**v2 vs v3 Comparison:**
+
+| Feature | v2 (Mode D/E) | v3 (Mode Y/Z) |
+|---------|---------------|----------------|
+| Clustering | K-Medoids only | K-Medoids / GMM / KMeans |
+| Labels | 2–5 word phrases | One word (general) |
+| Label source | Representatives only | All docs (default) or representatives (`--label_source`) |
+| Consolidation | Single-pass merge | Iterative chunked merge |
+| Classification | One doc per LLM call | Batched (20 per call) |
+| Stage 8 | Shared `tc-classify` | Built-in batched classification |
+| CLI | `tc-sealclust` | `tc-sealclust-v3` |
+
+**Cost**: ~K₀/30 + K₀/20 LLM calls (label discovery + classification) · **Time**: 5–15min
+
+---
+
 ### Mode Quick Reference
 
 | Scenario | Mode | Command |
 |----------|------|---------|
 | **One command, full automation** ⭐ | E | `tc-sealclust --data X --k0 300 --full` |
 | **One command, known K\*** ⭐ | E | `tc-sealclust --data X --k0 300 --k_star N --full` |
+| **v3: multi-method + one-word labels** | Z | `tc-sealclust-v3 --data X --k0 300 --full` |
+| **v3: GMM clustering backend** | Z | `tc-sealclust-v3 --data X --cluster_method gmm --full` |
+| **v3: with PCA reduction** | Z | `tc-sealclust-v3 --data X --k0 300 --reduction pca --full` |
 | **Hybrid: LLM + embedding K-opt** | F | `tc-hybrid --data X --full` |
 | **Graph community clustering** | H | `tc-graphclust --data X --target_k N --full` |
 | **Baseline: no LLM benchmark** | G | `tc-baseline --data X --method kmeans --k N` |
-| Debug / inspect stages | D | `tc-sealclust` → `tc-classify` → `--propagate` |
-| K-Medoids on raw embeddings | B | `tc-kmedoids` → `tc-label-gen` → `tc-classify --medoid_mode` |
-| GMM soft clusters | C | `tc-gmm` → `tc-label-gen` → `tc-classify --representative_mode` |
-| Paper baseline (most expensive) | A | `tc-seed-labels` → `tc-label-gen` → `tc-classify` → `tc-evaluate` |
-| Paper baseline (batched, 10× faster) | A | `tc-classify --batch_size 10 --run_dir <dir>` |
-| Reuse cached embeddings | Any | Pass `--run_dir ./runs/<existing_dir>` |
+| **Debug / inspect stages** | D | `tc-sealclust` → `tc-classify` → `--propagate` |
+| **K-Medoids on raw embeddings** | B | `tc-kmedoids` → `tc-label-gen` → `tc-classify --medoid_mode` |
+| **GMM soft clusters** | C | `tc-gmm` → `tc-label-gen` → `tc-classify --representative_mode` |
+| **Paper baseline (most expensive)** | A | `tc-seed-labels` → `tc-label-gen` → `tc-classify` → `tc-evaluate` |
+| **Paper baseline (batched, 10× faster)** | A | `tc-classify --batch_size 10 --run_dir <dir>` |
+| **Reuse cached embeddings** | Any | Pass `--run_dir ./runs/<existing_dir>` |
 
 ---
 
@@ -513,6 +609,13 @@ make run-baseline-kmeans data=massive_scenario auto_k=1 k_min=5 k_max=30
 make run-graphclust-full data=massive_scenario target_k=18
 make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
 make run-graphclust data=massive_scenario
+
+# ── SEAL-Clust v3 (Mode Z) ──
+make run-sealclust-v3-full data=massive_scenario
+make run-sealclust-v3-full data=massive_scenario kstar=18 cluster_method=gmm
+make run-sealclust-v3 data=massive_scenario kstar=18
+make run-sealclust-v3-classify data=massive_scenario run=./runs/<run_dir>
+make run-sealclust-v3-propagate data=massive_scenario run=./runs/<run_dir>
 ```
 
 | Variable | Default | Description |
@@ -534,6 +637,10 @@ make run-graphclust data=massive_scenario
 | `min_sim` | `0.3` | Graph clustering: min cosine similarity |
 | `resolution` | `1.0` | Graph clustering: Louvain resolution |
 | `target_k` | — | Graph clustering / Hybrid: target K |
+| `cluster_method` | `kmedoids` | SEAL-Clust v3: clustering backend (`kmedoids` / `gmm` / `kmeans`) |
+| `v3_classify_batch` | `20` | SEAL-Clust v3: representatives per classification call |
+| `reduction` | *(empty → none)* | SEAL-Clust v3: dim reduction (`none` / `pca` / `tsne`) |
+| `label_source` | `all` | SEAL-Clust v3: label discovery source (`all` / `representatives`) |
 
 ---
 
@@ -558,6 +665,29 @@ make run-graphclust data=massive_scenario
 | `--embedding_model M` | str | `all-MiniLM-L6-v2` | Sentence-transformers model |
 | `--label_chunk_size N` | int | `30` | Docs per LLM label-discovery call |
 | `--batch_size N` | int | `64` | Embedding batch size |
+| `--seed N` | int | `42` | Random seed |
+
+### `tc-sealclust-v3` — SEAL-Clust v3 Pipeline (Modes Y/Z)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--data NAME` | str | `massive_scenario` | Dataset name |
+| `--full` | flag | — | Run all 9 stages + evaluation (Mode Z) |
+| `--classify` | flag | — | Run Stage 8 only (requires `--run_dir`) |
+| `--propagate` | flag | — | Run Stage 9 only (requires `--run_dir`) |
+| `--k0 N` | int | `300` | Overclustering size K₀ |
+| `--k_star N` | int | `0` | Manual K\* (`0` = auto-estimate) |
+| `--k_method M` | str | `silhouette` | `silhouette` / `calinski` / `bic` / `ensemble` |
+| `--cluster_method M` | str | `kmedoids` | `kmedoids` / `gmm` / `kmeans` |
+| `--classify_batch_size N` | int | `20` | Representatives per LLM classification call |
+| `--reduction M` | str | `none` | `none` / `pca` / `tsne` — dimensionality reduction |
+| `--pca_dims N` | int | `50` | PCA output dimensions (only when `--reduction pca`) |
+| `--label_source M` | str | `all` | `all` = every document, `representatives` = K₀ reps only |
+| `--run_dir PATH` | str | — | Existing run directory |
+| `--use_large` | flag | — | Use `large.jsonl` split |
+| `--embedding_model M` | str | `all-MiniLM-L6-v2` | Sentence-transformers model |
+| `--label_chunk_size N` | int | `30` | Docs per LLM label-discovery call |
+| `--reuse_labels` | flag | — | Enable label cache reuse |
 | `--seed N` | int | `42` | Random seed |
 
 ### `tc-kmedoids` — K-Medoids Pre-Clustering (Mode B)

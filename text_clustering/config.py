@@ -58,6 +58,12 @@ SEALCLUST_ELBOW_STEP: int = int(os.getenv("SEALCLUST_ELBOW_STEP", "5"))
 # Label generation chunk size for representative batches
 SEALCLUST_LABEL_CHUNK_SIZE: int = int(os.getenv("SEALCLUST_LABEL_CHUNK_SIZE", "30"))
 
+# ── SEAL-Clust v3 settings ───────────────────────────────────────────
+SEALCLUST_V3_CLUSTER_METHOD: str = os.getenv(
+    "SEALCLUST_V3_CLUSTER_METHOD", "kmedoids",
+)  # kmedoids | gmm | kmeans
+SEALCLUST_V3_CLASSIFY_BATCH: int = int(os.getenv("SEALCLUST_V3_CLASSIFY_BATCH", "20"))
+
 # ── Hybrid pipeline settings ─────────────────────────────────────────
 HYBRID_LLM_BATCH_SIZE: int = int(os.getenv("HYBRID_LLM_BATCH_SIZE", "30"))
 HYBRID_P: float = float(os.getenv("HYBRID_P", "0.1"))  # overclustering proportion

@@ -200,12 +200,57 @@ def _parse_merge_response(response: str) -> list[str] | None:
 
 
 def merge_labels(args, all_labels, client, target_k: int | None = None):
-    prompt = prompt_construct_merge_label(all_labels, target_k=target_k)
-    response = chat(prompt, client, max_tokens=4096)
-    parsed = _parse_merge_response(response)
-    if parsed is not None:
-        return parsed
-    logger.warning("merge_labels: could not parse LLM response — returning unmerged list")
+    max_attempts = 3 if target_k else 1
+    best_result = None
+    best_distance = float("inf")
+
+    for attempt in range(1, max_attempts + 1):
+        prompt = prompt_construct_merge_label(
+            all_labels, target_k=target_k,
+        )
+        response = chat(prompt, client, max_tokens=4096)
+        parsed = _parse_merge_response(response)
+        if parsed is None:
+            logger.warning(
+                "merge_labels: attempt %d/%d — could not parse response",
+                attempt, max_attempts,
+            )
+            continue
+
+        if target_k is None:
+            return parsed
+
+        distance = abs(len(parsed) - target_k)
+        if distance < best_distance:
+            best_distance = distance
+            best_result = parsed
+
+        if len(parsed) == target_k:
+            logger.info(
+                "merge_labels: hit target K=%d on attempt %d",
+                target_k, attempt,
+            )
+            return parsed
+
+        logger.info(
+            "merge_labels: attempt %d/%d — got %d labels "
+            "(target %d, off by %d)",
+            attempt, max_attempts, len(parsed),
+            target_k, distance,
+        )
+
+    if best_result is not None:
+        logger.info(
+            "merge_labels: returning best result with %d labels "
+            "(target was %d)",
+            len(best_result), target_k,
+        )
+        return best_result
+
+    logger.warning(
+        "merge_labels: all %d attempts failed — returning unmerged list",
+        max_attempts,
+    )
     return all_labels
 
 
@@ -224,6 +269,7 @@ def main(args):
 
     logger.info("=== Step 1 — Label Generation ===")
     logger.info("Dataset : %s  |  split: %s", args.data, size)
+    logger.info("Target K: %s", args.target_k or "auto (no target)")
     logger.info("Run dir : %s", run_dir)
     logger.info("  (pass --run_dir %s to Step 2)", run_dir)
     start = time.time()
@@ -274,7 +320,7 @@ def main(args):
     write_json(os.path.join(run_dir, "labels_proposed.json"), all_labels)
 
     # target_k: only pass when explicitly requested via --target_k.
-    # The paper does NOT use a target — capable models (gemini, GPT-4) should
+    # The paper does NOT use a target — capable models (e.g. gemini-2.0-flash) should
     # consolidate naturally.  Forcing k fills slots with spurious labels.
     final_labels = merge_labels(args, all_labels, client, target_k=forced_k)
     write_json(os.path.join(run_dir, "labels_merged.json"), final_labels)
@@ -317,9 +363,12 @@ def build_parser():
     parser.add_argument(
         "--target_k", type=int, default=None,
         help=(
-            "If set, instruct the merge step to produce approximately this many labels. "
-            "Default: None (paper behaviour — let the model consolidate naturally). "
-            "Only use this with weaker models that under-consolidate without guidance."
+            "Target number of labels after the merge step.  "
+            "When set, the LLM is instructed to consolidate "
+            "labels to exactly this count (e.g. --target_k 18 "
+            "for massive_scenario).  If the first merge attempt "
+            "does not hit the target, up to 3 retries are made.  "
+            "Default: None (let the model consolidate naturally)."
         ),
     )
     # --api_key kept for backward compatibility but ignored; key comes from .env

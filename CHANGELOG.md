@@ -1,3 +1,20 @@
+## v1.7.0 (2026-03-23)
+
+### Feat
+
+- **sealclustv3**: adding the mode x and mode y in the pipeline
+
+### Fix
+
+- fixing the issue of labels by slightlighly modifing the prompt
+- fixing the calculation of accuracy with GMM and Kmeans for mode x and mode y
+- Creating two modes of label generation either with representative or with all docs
+- fix the problem of generating less labels than the ground truth
+- **docs & prompts**: correct model-name references and prompts typo (use gpt-3.5-turbo-0125 / gemini-2.0-flash)
+- restore FINDINGS.md to clean state
+- modifying the --target_k for the original implementation #9
+- modifying the --target_k for the original implementation
+
 ## v1.6.0 (2026-03-19)
 
 ### Feat
