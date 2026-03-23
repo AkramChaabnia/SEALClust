@@ -114,8 +114,11 @@ def run_pipeline(args) -> str:
     logger.info("=" * 70)
     logger.info("Dataset       : %s  |  split: %s", args.data, size)
     logger.info("Embedding     : %s", args.embedding_model)
-    logger.info("Reduction     : PCA → %dD", args.pca_dims)
+    logger.info("Reduction     : %s", args.reduction if args.reduction != "none" else "none (raw embeddings)")
+    if args.reduction == "pca":
+        logger.info("  PCA dims    : %d", args.pca_dims)
     logger.info("Clustering    : %s", args.cluster_method)
+    logger.info("Label source  : %s", args.label_source)
     logger.info("K₀ (overclust): %d", args.k0)
     if args.k_star:
         logger.info("K* (manual)   : %d", args.k_star)
@@ -145,18 +148,32 @@ def run_pipeline(args) -> str:
         np.save(emb_path, embeddings)
         logger.info("Stage 1: Saved embeddings shape=%s", embeddings.shape)
 
-    # ── Stage 2: Dimensionality Reduction (PCA) ──
-    reduced_path = os.path.join(run_dir, "embeddings_reduced.npy")
-    if os.path.exists(reduced_path):
-        logger.info("[cache] Loading reduced embeddings from %s", reduced_path)
-        embeddings_reduced = np.load(reduced_path)
+    # ── Stage 2: Dimensionality Reduction (optional) ──
+    if args.reduction == "none":
+        logger.info("Stage 2: Skipped — using raw %dD embeddings", embeddings.shape[1])
+        embeddings_for_clustering = embeddings
     else:
-        logger.info("Stage 2: PCA %dD → %dD", embeddings.shape[1], args.pca_dims)
-        embeddings_reduced = reduce_pca(
-            embeddings, n_components=args.pca_dims, random_state=args.seed,
-        )
-        np.save(reduced_path, embeddings_reduced)
-        logger.info("Stage 2: Reduced %s → %s", embeddings.shape, embeddings_reduced.shape)
+        reduced_path = os.path.join(run_dir, "embeddings_reduced.npy")
+        if os.path.exists(reduced_path):
+            logger.info("[cache] Loading reduced embeddings from %s", reduced_path)
+            embeddings_for_clustering = np.load(reduced_path)
+        elif args.reduction == "pca":
+            logger.info("Stage 2: PCA %dD → %dD", embeddings.shape[1], args.pca_dims)
+            embeddings_for_clustering = reduce_pca(
+                embeddings, n_components=args.pca_dims, random_state=args.seed,
+            )
+            np.save(reduced_path, embeddings_for_clustering)
+            logger.info("Stage 2: Reduced %s → %s", embeddings.shape, embeddings_for_clustering.shape)
+        elif args.reduction == "tsne":
+            from text_clustering.dimreduce import reduce_tsne
+            logger.info("Stage 2: t-SNE %dD → 2D", embeddings.shape[1])
+            embeddings_for_clustering = reduce_tsne(
+                embeddings, random_state=args.seed,
+            )
+            np.save(reduced_path, embeddings_for_clustering)
+            logger.info("Stage 2: Reduced %s → %s", embeddings.shape, embeddings_for_clustering.shape)
+        else:
+            raise ValueError(f"Unknown reduction method: {args.reduction!r}")
 
     # ── Stage 3: Overclustering ──
     meta_path = os.path.join(run_dir, "sealclust_v3_metadata.json")
@@ -174,17 +191,17 @@ def run_pipeline(args) -> str:
         k0 = min(args.k0, n_documents - 1)
         logger.info(
             "Stage 3: Overclustering K₀=%d via %s on %dD",
-            k0, args.cluster_method, embeddings_reduced.shape[1],
+            k0, args.cluster_method, embeddings_for_clustering.shape[1],
         )
         cluster_labels, extra, cluster_method = run_overclustering(
-            embeddings_reduced, k0=k0, method=args.cluster_method,
+            embeddings_for_clustering, k0=k0, method=args.cluster_method,
             random_state=args.seed,
         )
 
         # ── Stage 4: Representative Selection ──
         logger.info("Stage 4: Selecting representatives (%s) …", cluster_method)
         rep_docs, rep_indices = select_representatives(
-            data_list, embeddings_reduced, cluster_labels,
+            data_list, embeddings_for_clustering, cluster_labels,
             cluster_method, extra,
         )
         _write_jsonl(os.path.join(run_dir, "representative_documents.jsonl"), rep_docs)
@@ -203,11 +220,11 @@ def run_pipeline(args) -> str:
     else:
         logger.info(
             "Stage 6: Estimating K* via %s on %d embeddings (dim=%d)",
-            args.k_method, embeddings_reduced.shape[0],
-            embeddings_reduced.shape[1],
+            args.k_method, embeddings_for_clustering.shape[0],
+            embeddings_for_clustering.shape[1],
         )
         k_star, k_details = estimate_k_star(
-            embeddings_reduced,
+            embeddings_for_clustering,
             k_min=args.bic_k_min,
             k_max=args.bic_k_max,
             method=args.k_method,
@@ -248,6 +265,8 @@ def run_pipeline(args) -> str:
 
     if not _labels_from_cache:
         # ── Stage 5: Label Discovery ──
+        # v3 sends ALL documents (not just representatives) in chunks.
+        # Chunked LLM calls are cheap and give much better label coverage.
         labels_proposed_path = os.path.join(run_dir, "labels_proposed.json")
         _need_discovery = True
 
@@ -272,21 +291,32 @@ def run_pipeline(args) -> str:
                 from text_clustering.llm import ini_client
                 client = ini_client()
 
-            # Load representative texts
-            rep_docs_path = os.path.join(run_dir, "representative_documents.jsonl")
-            rep_texts = []
-            with open(rep_docs_path) as f:
-                for line in f:
-                    rep_texts.append(json.loads(line)["input"])
-
             # Pre-seed with existing labels if any (partial cache)
             existing = []
             if os.path.exists(labels_proposed_path):
                 with open(labels_proposed_path) as f:
                     existing = json.load(f)
 
+            # Choose which texts to send for label discovery
+            if args.label_source == "representatives":
+                # Only representative documents (K₀ texts — faster)
+                discovery_texts = [texts[i] for i in rep_indices]
+                logger.info(
+                    "Stage 5 (v3): Discovering labels from %d REPRESENTATIVE texts "
+                    "(--label_source representatives)",
+                    len(discovery_texts),
+                )
+            else:
+                # ALL documents (better label coverage)
+                discovery_texts = texts
+                logger.info(
+                    "Stage 5 (v3): Discovering labels from ALL %d documents "
+                    "(--label_source all)",
+                    len(discovery_texts),
+                )
+
             candidate_labels = discover_labels_v3(
-                rep_texts, client, chunk_size=args.label_chunk_size,
+                discovery_texts, client, chunk_size=args.label_chunk_size,
                 run_dir=run_dir,
                 min_labels=k_star if k_star else 0,
             )
@@ -331,8 +361,9 @@ def run_pipeline(args) -> str:
             "n_documents": n_documents,
             "pipeline": "sealclust_v3",
             "cluster_method": cluster_method,
-            "reduction": "pca",
-            "reduction_dims": args.pca_dims,
+            "reduction": args.reduction,
+            "reduction_dims": embeddings_for_clustering.shape[1],
+            "label_source": args.label_source,
             "k0": k0,
             "k_star": k_star,
             "k_star_method": "manual" if args.k_star else args.k_method,
@@ -636,8 +667,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Dimensionality reduction
     parser.add_argument(
+        "--reduction", type=str, default="none",
+        choices=["none", "pca", "tsne"],
+        help="Dimensionality reduction method (default: none — raw embeddings)",
+    )
+    parser.add_argument(
         "--pca_dims", type=int, default=SEALCLUST_PCA_DIMS,
-        help="PCA output dimensions (default: 50)",
+        help="PCA output dimensions, only used when --reduction pca (default: 50)",
     )
 
     # Overclustering
@@ -667,7 +703,17 @@ def build_parser() -> argparse.ArgumentParser:
     # Label discovery
     parser.add_argument(
         "--label_chunk_size", type=int, default=SEALCLUST_LABEL_CHUNK_SIZE,
-        help="Representatives per LLM call for label discovery (default: 30)",
+        help="Documents per LLM call for label discovery (default: 30)",
+    )
+    parser.add_argument(
+        "--label_source", type=str, default="all",
+        choices=["all", "representatives"],
+        help=(
+            "Which texts to send for label discovery: "
+            "'all' = every document (better coverage), "
+            "'representatives' = only K₀ representative docs (faster, fewer LLM calls). "
+            "Default: all."
+        ),
     )
 
     # Classification

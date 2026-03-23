@@ -173,7 +173,7 @@ All datasets are under `./datasets/<name>/` with `small.jsonl` and `large.jsonl`
 
 ## 5. Usage — All Pipeline Modes
 
-### Mode E — SEAL-Clust v2 Full Pipeline ⭐ RECOMMENDED
+### Mode E — SEAL-Clust v2 Full Pipeline 
 
 Single `--full` command runs all 9 stages + evaluation.
 
@@ -456,8 +456,12 @@ make run-graphclust-full data=massive_scenario knn=20 resolution=1.5
 SEAL-Clust v3 is an improved version of the SEAL-Clust framework with:
 
 - **Multiple clustering backends**: K-Medoids (default), GMM, or KMeans
+- **No default dimensionality reduction**: Clusters on raw 384D embeddings by default; optionally `--reduction pca` or `--reduction tsne`
+- **Label discovery from ALL documents**: Sends all documents (not just representatives) to the LLM in chunks for better label coverage
+- **Configurable label source**: `--label_source all` (default, all documents) or `--label_source representatives` (only K₀ rep docs — faster, fewer LLM calls)
 - **One-word label constraint**: Labels are single general category words (e.g. "travel", "finance")
 - **Iterative chunked consolidation**: Handles 500+ candidate labels reliably
+- **Retry-based label discovery**: If fewer labels than K* are discovered, retries with reshuffled chunks
 - **Batched representative classification**: Classify multiple docs per LLM call (20× default)
 - **Flexible representative selection**: Medoids for K-Medoids; closest-to-centroid for GMM/KMeans
 
@@ -465,17 +469,17 @@ SEAL-Clust v3 is an improved version of the SEAL-Clust framework with:
 
 ```
 Stage 1: Embed documents (sentence-transformers)
-Stage 2: PCA dimensionality reduction
+Stage 2: Dimensionality reduction (optional — none by default)
 Stage 3: Overclustering (K₀ clusters via kmedoids/gmm/kmeans)
 Stage 4: Select representative per cluster
-Stage 5: LLM label discovery (one-word labels)
+Stage 5: LLM label discovery (one-word labels, chunked — all docs or reps only)
 Stage 6: K* estimation (manual or automatic)
 Stage 7: LLM label consolidation (iterative merge → K* labels)
 Stage 8: LLM representative classification (batched)
 Stage 9: Label propagation (rep → all documents)
 ```
 
-**Mode Z — Full Pipeline** (all 9 stages + evaluation):
+**Mode Z — Full Pipeline ⭐ RECOMMENDED** (all 9 stages + evaluation):
 
 ```bash
 # Full end-to-end with default K-Medoids
@@ -490,9 +494,17 @@ tc-sealclust-v3 --data massive_scenario --k0 300 --cluster_method gmm --full
 # Using KMeans
 tc-sealclust-v3 --data massive_scenario --k0 300 --cluster_method kmeans --full
 
+# With PCA dimensionality reduction
+tc-sealclust-v3 --data massive_scenario --k0 300 --reduction pca --full
+
+# Label discovery from representatives only (faster)
+tc-sealclust-v3 --data massive_scenario --k0 300 --label_source representatives --full
+
 # Using Make
 make run-sealclust-v3-full data=massive_scenario
 make run-sealclust-v3-full data=massive_scenario kstar=18 cluster_method=gmm
+make run-sealclust-v3-full data=massive_scenario reduction=pca
+make run-sealclust-v3-full data=massive_scenario label_source=representatives
 ```
 
 **Mode Y — Step-by-Step** (run stages separately):
@@ -522,6 +534,7 @@ make run-sealclust-v3-propagate data=massive_scenario run=./runs/<dir>
 |---------|---------------|----------------|
 | Clustering | K-Medoids only | K-Medoids / GMM / KMeans |
 | Labels | 2–5 word phrases | One word (general) |
+| Label source | Representatives only | All docs (default) or representatives (`--label_source`) |
 | Consolidation | Single-pass merge | Iterative chunked merge |
 | Classification | One doc per LLM call | Batched (20 per call) |
 | Stage 8 | Shared `tc-classify` | Built-in batched classification |
@@ -539,6 +552,7 @@ make run-sealclust-v3-propagate data=massive_scenario run=./runs/<dir>
 | **One command, known K\*** ⭐ | E | `tc-sealclust --data X --k0 300 --k_star N --full` |
 | **v3: multi-method + one-word labels** | Z | `tc-sealclust-v3 --data X --k0 300 --full` |
 | **v3: GMM clustering backend** | Z | `tc-sealclust-v3 --data X --cluster_method gmm --full` |
+| **v3: with PCA reduction** | Z | `tc-sealclust-v3 --data X --k0 300 --reduction pca --full` |
 | **Hybrid: LLM + embedding K-opt** | F | `tc-hybrid --data X --full` |
 | **Graph community clustering** | H | `tc-graphclust --data X --target_k N --full` |
 | **Baseline: no LLM benchmark** | G | `tc-baseline --data X --method kmeans --k N` |
@@ -627,6 +641,8 @@ make run-sealclust-v3-propagate data=massive_scenario run=./runs/<run_dir>
 | `target_k` | — | Graph clustering / Hybrid: target K |
 | `cluster_method` | `kmedoids` | SEAL-Clust v3: clustering backend (`kmedoids` / `gmm` / `kmeans`) |
 | `v3_classify_batch` | `20` | SEAL-Clust v3: representatives per classification call |
+| `reduction` | *(empty → none)* | SEAL-Clust v3: dim reduction (`none` / `pca` / `tsne`) |
+| `label_source` | `all` | SEAL-Clust v3: label discovery source (`all` / `representatives`) |
 
 ---
 
@@ -666,7 +682,9 @@ make run-sealclust-v3-propagate data=massive_scenario run=./runs/<run_dir>
 | `--k_method M` | str | `silhouette` | `silhouette` / `calinski` / `bic` / `ensemble` |
 | `--cluster_method M` | str | `kmedoids` | `kmedoids` / `gmm` / `kmeans` |
 | `--classify_batch_size N` | int | `20` | Representatives per LLM classification call |
-| `--pca_dims N` | int | `50` | PCA output dimensions |
+| `--reduction M` | str | `none` | `none` / `pca` / `tsne` — dimensionality reduction |
+| `--pca_dims N` | int | `50` | PCA output dimensions (only when `--reduction pca`) |
+| `--label_source M` | str | `all` | `all` = every document, `representatives` = K₀ reps only |
 | `--run_dir PATH` | str | — | Existing run directory |
 | `--use_large` | flag | — | Use `large.jsonl` split |
 | `--embedding_model M` | str | `all-MiniLM-L6-v2` | Sentence-transformers model |

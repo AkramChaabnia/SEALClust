@@ -112,8 +112,10 @@ help:
 	@echo ""
 	@echo "  ── SEAL-Clust v3 (Modes Y/Z) ──"
 	@echo "  run-sealclust-v3 data=<d> [k0=300] [kstar=0] [kmethod=silhouette] [cluster_method=kmedoids]"
-	@echo "                                     Stages 1–7: embed + PCA + overcluster + labels + K* + consolidate"
+	@echo "                                     Stages 1–7: embed + overcluster + labels + K* + consolidate"
 	@echo "                                     cluster_method: kmedoids (default) | gmm | kmeans"
+	@echo "                                     v3_reduction: none (default) | pca | tsne"
+	@echo "                                     label_source: all (default) | representatives"
 	@echo "  run-sealclust-v3-full data=<d> [k0=300] [kstar=0] [kmethod=silhouette] [cluster_method=kmedoids]"
 	@echo "                                     Stages 1–9 + evaluation in one command (Mode Z)"
 	@echo "  run-sealclust-v3-classify data=<d> run=<run_dir>"
@@ -125,6 +127,8 @@ help:
 	@echo "    make run-sealclust-v3-full data=massive_scenario"
 	@echo "    make run-sealclust-v3-full data=massive_scenario kstar=18"
 	@echo "    make run-sealclust-v3-full data=massive_scenario cluster_method=gmm k0=200"
+	@echo "    make run-sealclust-v3-full data=massive_scenario v3_reduction=pca v3_pca_dims=50"
+	@echo "    make run-sealclust-v3-full data=massive_scenario label_source=representatives"
 	@echo "    make run-sealclust-v3 data=massive_scenario kstar=18"
 	@echo ""
 
@@ -442,21 +446,30 @@ endif
 # usage: make run-sealclust-v3 data=massive_scenario
 #        make run-sealclust-v3 data=massive_scenario k0=200 kstar=18
 #        make run-sealclust-v3 data=massive_scenario cluster_method=gmm
-# Default: Stages 1–7 (Embed + PCA + Overcluster + Labels + K* + Consolidate)
+#        make run-sealclust-v3 data=massive_scenario reduction=pca pca_dims=50
+#        make run-sealclust-v3 data=massive_scenario label_source=representatives
+# Default: Stages 1–7 (Embed + Overcluster + Labels + K* + Consolidate)
+# No dimensionality reduction by default (raw 384D embeddings).
 cluster_method ?= kmedoids
 v3_classify_batch ?= 20
+v3_reduction ?= none
+v3_pca_dims ?= 50
+label_source ?= all
 run-sealclust-v3:
 ifndef data
 	$(error data is required, e.g. make run-sealclust-v3 data=massive_scenario)
 endif
 	mkdir -p logs
 	$(BIN)tc-sealclust-v3 --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) \
-		--cluster_method $(cluster_method) \
+		--cluster_method $(cluster_method) --reduction $(v3_reduction) \
+		$(if $(filter-out none,$(v3_reduction)),--pca_dims $(v3_pca_dims),) \
+		--label_source $(label_source) \
 		$(if $(reuse_labels),--reuse_labels,) \
 		2>&1 | tee logs/$(data)_sealclust_v3.log
 
 # usage: make run-sealclust-v3-full data=massive_scenario
 #        make run-sealclust-v3-full data=massive_scenario k0=300 kstar=18 cluster_method=gmm
+#        make run-sealclust-v3-full data=massive_scenario v3_reduction=pca v3_pca_dims=50
 # Runs the entire v3 pipeline end-to-end: Stages 1-9 + evaluation.
 run-sealclust-v3-full:
 ifndef data
@@ -464,7 +477,11 @@ ifndef data
 endif
 	mkdir -p logs
 	$(BIN)tc-sealclust-v3 --data $(data) --k0 $(k0) --k_star $(kstar) --k_method $(kmethod) \
-		--cluster_method $(cluster_method) --classify_batch_size $(v3_classify_batch) --full \
+		--cluster_method $(cluster_method) --classify_batch_size $(v3_classify_batch) \
+		--reduction $(v3_reduction) \
+		$(if $(filter-out none,$(v3_reduction)),--pca_dims $(v3_pca_dims),) \
+		--label_source $(label_source) \
+		--full \
 		$(if $(reuse_labels),--reuse_labels,) \
 		2>&1 | tee logs/$(data)_sealclust_v3_full.log
 
