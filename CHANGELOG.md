@@ -1,3 +1,15 @@
+## v1.8.0 (2026-03-26)
+
+### Feat
+
+- adding the configuration and the propmts of the sealclust v4
+- adding sealclust v4 logic
+- creating sealclust v4 pipeline
+
+### Fix
+
+- sync develop with main (docs/delete PR was merged into main by mistake)
+
 ## v1.7.0 (2026-03-23)
 
 ### Feat

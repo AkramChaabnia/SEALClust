@@ -7,7 +7,7 @@ include = ["text_clustering/**/*.py", "paper/*.py"]
 
 [project]
 name = "text-clustering-llm"
-version = "1.7.0"
+version = "1.8.0"
 description = "Text Clustering as Classification with LLMs — PPD M2 MLSD"
 readme = "README.md"
 requires-python = ">=3.12"
