@@ -79,6 +79,8 @@ MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
 
 if __name__ == "__main__":
+    from text_clustering.config import USE_RESPONSES_API
+
     base_url = os.getenv("OPENAI_BASE_URL", "(openai default)")
     provider_env = os.getenv("LLM_PROVIDER", "")
     detected = (
@@ -88,14 +90,23 @@ if __name__ == "__main__":
     print(f"Provider  : {detected}")
     print(f"Base URL  : {base_url}")
     print(f"Model     : {MODEL}")
+    print(f"API mode  : {'Responses API' if USE_RESPONSES_API else 'Chat Completions'}")
     print(f"Temp      : {TEMPERATURE}  |  Max tokens: {MAX_TOKENS}")
     print("\nSending smoke-test request...")
     client = make_client()
-    resp = client.chat.completions.create(
-        model=MODEL,
-        temperature=TEMPERATURE,
-        max_tokens=64,
-        messages=[{"role": "user", "content": "Reply with exactly: OK"}],
-    )
-    print(f"Response  : {resp.choices[0].message.content}")
+
+    if USE_RESPONSES_API:
+        resp = client.responses.create(
+            model=MODEL,
+            input=[{"role": "user", "content": "Reply with exactly: OK"}],
+        )
+        print(f"Response  : {resp.output_text}")
+    else:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            temperature=TEMPERATURE,
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Reply with exactly: OK"}],
+        )
+        print(f"Response  : {resp.choices[0].message.content}")
     print("Smoke test passed.")

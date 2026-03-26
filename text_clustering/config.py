@@ -19,6 +19,18 @@ MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 FORCE_JSON_MODE: bool = os.getenv("LLM_FORCE_JSON_MODE", "false").lower() == "true"
 REQUEST_DELAY: float = float(os.getenv("LLM_REQUEST_DELAY", "2"))
 
+# ── Responses API (gpt-5.x / o-series) ───────────────────────────────
+# Auto-detect: if the model starts with "gpt-5" or "o1" or "o3" or "o4-mini",
+# use the Responses API instead of Chat Completions.  Override explicitly
+# with USE_RESPONSES_API=true/false.
+_auto_responses = MODEL.startswith(("gpt-5", "o1", "o3", "o4"))
+USE_RESPONSES_API: bool = (
+    os.getenv("USE_RESPONSES_API", "").lower() in ("true", "1", "yes")
+    if os.getenv("USE_RESPONSES_API")
+    else _auto_responses
+)
+REASONING_EFFORT: str = os.getenv("LLM_REASONING_EFFORT", "medium")  # low | medium | high
+
 # ── K-Medoids pre-clustering settings ─────────────────────────────────────
 KMEDOIDS_ENABLED: bool = os.getenv("KMEDOIDS_ENABLED", "false").lower() == "true"
 KMEDOIDS_K: int = int(os.getenv("KMEDOIDS_K", "100"))

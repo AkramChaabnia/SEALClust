@@ -381,3 +381,198 @@ def prompt_v3_classify_representatives_batch(
         f"Return ONLY valid JSON. No explanation, no markdown."
     )
     return prompt
+
+
+# ---------------------------------------------------------------------------
+# SEAL-Clust v4 prompts — improved label quality
+# ---------------------------------------------------------------------------
+# v4 design rationale:
+#   - Discovery: functional-intent focus — identify CATEGORY-LEVEL labels
+#     (e.g. "sports", "finance", "shopping") rather than hyper-specific labels
+#     ("Sports Results Management", "Financial Planning").  This dramatically
+#     reduces label explosion (from 900+ to ~40-80 candidate labels).
+#   - Consolidation: concrete merge-vs-keep examples and strict counting.
+#     Merge rules reference functional domain equivalence, not surface
+#     similarity of label text.
+#   - Classification: clean intent-matching — pick the category that
+#     captures the CORE action or request in the document.
+# ---------------------------------------------------------------------------
+
+
+def prompt_v4_discover_labels(
+    representative_texts: list[str],
+    existing_labels: list[str] | None = None,
+    dataset_description: str = "",
+) -> str:
+    """Stage 5 — v4 Label Discovery.
+
+    When *dataset_description* is provided, the LLM gets domain context
+    that helps it produce more accurate, appropriately-scoped labels.
+    When *existing_labels* is provided the LLM is encouraged to reuse them
+    when appropriate, but should still create new labels when needed.
+    """
+    json_example = {"labels": ["label_a", "label_b", "label_c"]}
+    prompt = "You are an expert text analyst.\n\n"
+
+    if dataset_description:
+        prompt += (
+            f"DATASET CONTEXT: {dataset_description}\n\n"
+        )
+
+    prompt += (
+        "Your task: examine the documents below and identify the distinct "
+        "CATEGORIES they belong to, then return the set of distinct "
+        "category labels.\n\n"
+    )
+
+    # If we already have labels from previous batches, encourage reuse
+    if existing_labels:
+        prompt += (
+            "LABELS ALREADY IDENTIFIED (from previous batches):\n"
+            f"  {existing_labels}\n\n"
+            "- Reuse an existing label when a document CLEARLY fits it.\n"
+            "- Create a NEW label when a document belongs to a genuinely "
+            "different category not represented above.\n\n"
+        )
+
+    prompt += (
+        "RULES:\n"
+        "1. Each label must be ONE lowercase word.\n"
+        "2. Labels should describe the HIGH-LEVEL scenario, service, or "
+        "feature area — not the specific device, object, or topic.\n"
+        "3. Different actions or requests within the SAME service share "
+        "ONE label.\n"
+        "4. Keep genuinely DIFFERENT services/features as separate labels.\n"
+        "5. Do NOT create near-duplicates.\n\n"
+        "Documents:\n"
+    )
+    for i, text in enumerate(representative_texts, 1):
+        prompt += f"{i}. {text}\n"
+    prompt += (
+        f"\nReturn ONLY the list of distinct category labels in JSON "
+        f"format like: {json_example}\n"
+        "Include both reused labels AND any new ones. "
+        "Return ONLY valid JSON. No explanation, no markdown."
+    )
+    return prompt
+
+
+def prompt_v4_consolidate_labels(
+    label_list: list[str],
+    target_k: int,
+    dataset_description: str = "",
+) -> str:
+    """Stage 7 — v4 Label Consolidation.
+
+    When *dataset_description* is provided, gives the LLM domain context
+    so it makes smarter merge decisions.
+    """
+    json_example = {"merged_labels": ["category_a", "category_b", "category_c"]}
+    labels_str = "\n".join(f"  - {lbl}" for lbl in label_list)
+    prompt = ""
+
+    if dataset_description:
+        prompt += f"DATASET CONTEXT: {dataset_description}\n\n"
+
+    prompt += (
+        f"You have {len(label_list)} candidate category labels collected "
+        f"from a dataset. Many are duplicates, synonyms, or near-duplicates "
+        f"that should be merged. Your task: consolidate into EXACTLY "
+        f"{target_k} final labels.\n\n"
+        f"MERGE RULES (strict):\n"
+        f"1. MERGE labels that are exact synonyms or spelling variants "
+        f"(e.g. 'lights'/'lighting'/'lamp' → pick one).\n"
+        f"2. MERGE labels that clearly refer to the same real-world "
+        f"concept (e.g. 'reminder'/'alarm' if they both mean scheduled "
+        f"alerts).\n"
+        f"3. MERGE hyper-specific labels INTO the broader category they "
+        f"belong to ONLY when there is already a broader label in the "
+        f"list (e.g. 'coffee'/'recipe' → 'cooking' if 'cooking' exists).\n"
+        f"4. DO NOT merge labels that represent DIFFERENT user scenarios "
+        f"or services, even if they seem topically related.\n\n"
+        f"PRESERVE RULES (critical):\n"
+        f"- Labels that describe DIFFERENT user actions, services, or "
+        f"feature areas must stay separate even if topically related.\n"
+        f"- E.g. 'making food at home' vs. 'ordering food delivery' are "
+        f"DIFFERENT scenarios — do NOT merge them.\n"
+        f"- E.g. 'sending an email' vs. 'posting on social media' are "
+        f"DIFFERENT communication types — do NOT merge them.\n"
+        f"- E.g. 'setting an alarm' vs. 'managing a calendar event' are "
+        f"DIFFERENT time-management features — do NOT merge them.\n"
+        f"- When in doubt, KEEP labels separate rather than merging.\n\n"
+        f"LABEL FORMAT:\n"
+        f"- Each final label: 1 lowercase word.\n"
+        f"- Do NOT create vague catch-all labels like 'stuff', "
+        f"'information', 'services', 'other', or 'miscellaneous'.\n"
+        f"- The final list must have EXACTLY {target_k} labels.\n\n"
+        f"Candidate labels:\n{labels_str}\n\n"
+        f"Return EXACTLY {target_k} merged labels in JSON format "
+        f"like: {json_example}\n"
+        f"Return ONLY valid JSON. No explanation, no markdown."
+    )
+    return prompt
+
+
+def prompt_v4_classify_representative(
+    label_list: list[str],
+    document: str,
+    dataset_description: str = "",
+) -> str:
+    """Stage 8 — v4 Single Representative Classification."""
+    json_example = {"label": label_list[0] if label_list else "label_a"}
+    prompt = ""
+
+    if dataset_description:
+        prompt += f"DATASET CONTEXT: {dataset_description}\n\n"
+
+    prompt += (
+        "Classify the document into exactly ONE of the given labels.\n\n"
+        f"Labels: {label_list}\n\n"
+        f"Document: \"{document}\"\n\n"
+        "Instructions:\n"
+        "- Determine which category the document belongs to, given the "
+        "dataset context above.\n"
+        "- You MUST pick from the labels listed above — no other value "
+        "is allowed.\n"
+        "- If the document could fit multiple labels, pick the most "
+        "SPECIFIC one.\n"
+        f"- Return in JSON format like: {json_example}\n"
+        "Return ONLY valid JSON."
+    )
+    return prompt
+
+
+def prompt_v4_classify_representatives_batch(
+    label_list: list[str],
+    documents: list[str],
+    dataset_description: str = "",
+) -> str:
+    """Stage 8 — v4 Batched Representative Classification."""
+    ex_labels = label_list[:3] if len(label_list) >= 3 else label_list
+    json_example = {str(i + 1): lbl for i, lbl in enumerate(ex_labels)}
+    prompt = ""
+
+    if dataset_description:
+        prompt += f"DATASET CONTEXT: {dataset_description}\n\n"
+
+    prompt += (
+        "Classify EACH document below into exactly ONE of the given labels.\n\n"
+        f"Labels: {label_list}\n\n"
+        "Documents:\n"
+    )
+    for i, doc in enumerate(documents, 1):
+        prompt += f"{i}. {doc}\n"
+    prompt += (
+        f"\nInstructions:\n"
+        f"- For each document, determine which category it belongs to, "
+        f"given the dataset context.\n"
+        f"- Choose the most SPECIFIC matching label.\n"
+        f"- You MUST pick from the labels listed above — no other value "
+        f"is allowed.\n"
+        f"- Be CONSISTENT: similar documents must receive the same label.\n"
+        f"- You MUST classify ALL {len(documents)} documents.\n"
+        f"- Return a JSON object mapping each document number to its label "
+        f"like: {json_example}\n"
+        f"Return ONLY valid JSON."
+    )
+    return prompt
