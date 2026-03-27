@@ -7,7 +7,7 @@ include = ["text_clustering/**/*.py"]
 
 [project]
 name = "sealclust"
-version = "1.9.0"
+version = "2.0.0"
 description = "Text Clustering as Classification with LLMs — PPD M2 MLSD"
 readme = "README.md"
 requires-python = ">=3.12"

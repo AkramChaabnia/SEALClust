@@ -1,3 +1,14 @@
+## v2.0.0 (2026-03-27)
+
+### Feat
+
+- **findings**: add Gemini Flash results for all 5 datasets (arxiv_fine & go_emotion beat paper baseline)
+
+### Refactor
+
+- rename repository from text-clustering-llm to SEALClust
+- update all URLs, package name, and references across codebase
+
 ## v1.8.0 (2026-03-26)
 
 ### Feat
