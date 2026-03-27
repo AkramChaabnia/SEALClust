@@ -44,6 +44,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Build tools
+.ruff_cache/
+
 # Test artifacts
 .coverage
 htmlcov/
