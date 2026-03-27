@@ -461,7 +461,7 @@ def consolidate_labels_v3(
     """Stage 7: Merge candidate labels into exactly K* final labels.
 
     Uses iterative chunked merging for robustness when there are hundreds
-    of candidate labels (same strategy as tools/remerge_labels.py).
+    of candidate labels (same strategy as text_clustering.tools.remerge_labels).
 
     After the LLM merge attempts, applies a deterministic post-processing
     step using embedding-based similarity to guarantee exactly K* labels.

@@ -3,11 +3,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-include = ["text_clustering/**/*.py", "paper/*.py"]
+include = ["text_clustering/**/*.py"]
 
 [project]
 name = "text-clustering-llm"
-version = "1.8.0"
+version = "1.9.0"
 description = "Text Clustering as Classification with LLMs — PPD M2 MLSD"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,17 +18,45 @@ authors = [
   { name = "Mohamed Raouf Razi" },
 ]
 
+[project.urls]
+Repository = "https://github.com/AkramChaabnia/text-clustering-llm"
+Documentation = "https://github.com/AkramChaabnia/text-clustering-llm/blob/develop/README.md"
+"Original Paper" = "https://arxiv.org/abs/2410.00927"
+"Original Code" = "https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM"
+Issues = "https://github.com/AkramChaabnia/text-clustering-llm/issues"
+
 dependencies = [
-  "openai>=1.30.0",
-  "httpx>=0.27.0",
-  "scikit-learn>=1.4.0",
-  "sentence-transformers>=2.7.0",
-  "scipy>=1.13.0",
-  "numpy>=1.26.0",
-  "tqdm>=4.66.0",
+  # Baseline pipeline dependencies (core)
   "python-dotenv>=1.0.0",
-  "matplotlib>=3.8.0",
+  "tqdm>=4.66.0",
+  "openai>=1.30.0",
+  "numpy>=1.26.0",
+  "scipy>=1.13.0",
+  "scikit-learn>=1.4.0",
+]
+
+[project.optional-dependencies]
+embeddings = [
+  "sentence-transformers>=2.7.0",
   "umap-learn>=0.5.0",
+]
+viz = [
+  "matplotlib>=3.8.0",
+]
+http = [
+  "httpx>=0.27.0",
+]
+dev = [
+  "ruff>=0.4.0",
+  "commitizen>=3.27.0",
+  "pre-commit>=3.7.0",
+  "mypy>=1.8.0",
+  "pytest>=7.4.0",
+  "pytest-cov>=4.1.0",
+]
+# All extras for full development environment
+all = [
+  "text-clustering-llm[embeddings,viz,http,dev]",
 ]
 
 [project.scripts]
@@ -36,7 +64,10 @@ tc-seed-labels    = "text_clustering.pipeline.seed_labels:main"
 tc-label-gen      = "text_clustering.pipeline.label_generation:main_cli"
 tc-classify       = "text_clustering.pipeline.classification:main_cli"
 tc-evaluate       = "text_clustering.pipeline.evaluation:main_cli"
-tc-preflight      = "tools.preflight:main"
+tc-preflight      = "text_clustering.tools.preflight:main"
+tc-probe-models   = "text_clustering.tools.probe_models:main"
+tc-remerge-labels = "text_clustering.tools.remerge_labels:main"
+tc-analyze        = "text_clustering.dataset_analysis:main_cli"
 tc-kmedoids       = "text_clustering.pipeline.kmedoids_preprocessing:main_cli"
 tc-gmm            = "text_clustering.pipeline.gmm_preprocessing:main_cli"
 tc-sealclust      = "text_clustering.pipeline.sealclust_pipeline:main_cli"
@@ -46,13 +77,6 @@ tc-visualize      = "text_clustering.visualization:main_cli"
 tc-hybrid         = "text_clustering.pipeline.hybrid_pipeline:main_cli"
 tc-baseline       = "text_clustering.pipeline.baseline_pipeline:main_cli"
 tc-graphclust     = "text_clustering.pipeline.graphclust_pipeline:main_cli"
-
-[project.optional-dependencies]
-dev = [
-  "commitizen>=3.27.0",
-  "ruff>=0.4.0",
-  "pre-commit>=3.7.0",
-]
 
 [tool.commitizen]
 name = "cz_conventional_commits"

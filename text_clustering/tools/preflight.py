@@ -19,7 +19,7 @@ Checks
 
 Usage
 -----
-    python tools/preflight.py
+    python -m text_clustering.tools.preflight
     tc-preflight            # if installed via `uv pip install -e .`
 """
 
@@ -35,8 +35,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Bootstrap: load .env before importing anything from text_clustering
 # ---------------------------------------------------------------------------
-_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(_ROOT))
+_ROOT = Path(__file__).resolve().parent.parent.parent
 
 from dotenv import load_dotenv  # noqa: E402
 

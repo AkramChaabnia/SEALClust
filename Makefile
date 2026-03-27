@@ -26,6 +26,7 @@ help:
 	@echo "  run-step0                              seed labels (run once)"
 	@echo "  run-step1 data=<dataset>               label generation — prints the run directory"
 	@echo "            reuse_labels=1                reuse cached labels (see Section 8 in README)"
+	@echo "            target_k=<K>                  guidance: true number of classes (for consolidation)"
 	@echo "  run-step2 data=<d> run=<run_dir>       classification (background, resumes on restart)"
 	@echo "            classify_batch=10             batched mode: 10× fewer LLM calls"
 	@echo "  run-step3 data=<d> run=<run_dir>       evaluation → results.json"
@@ -190,14 +191,15 @@ release:
 run-step0:
 	$(BIN)tc-seed-labels
 
-# usage: make run-step1 data=massive_scenario
+# usage: make run-step1 data=massive_scenario [target_k=N] [reuse_labels=1]
 # Prints the created run_dir — copy it for use in steps 2 and 3.
+# target_k: guidance for label consolidation (e.g. true number of classes)
 run-step1:
 ifndef data
 	$(error data is required, e.g. make run-step1 data=massive_scenario)
 endif
 	mkdir -p logs
-	$(BIN)tc-label-gen --data $(data) $(if $(reuse_labels),--reuse_labels,) 2>&1 | tee logs/$(data)_label_gen.log
+	$(BIN)tc-label-gen --data $(data) $(if $(reuse_labels),--reuse_labels,) $(if $(target_k),--target_k $(target_k),) 2>&1 | tee logs/$(data)_label_gen.log
 
 # usage: make run-step2 data=massive_scenario run=./runs/massive_scenario_small_20260220_143012
 # Runs in the background; resumes automatically if a checkpoint.json exists in run_dir.

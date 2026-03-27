@@ -15,8 +15,8 @@ tool uses an **iterative chunked reduction** strategy:
 
 Usage::
 
-    python tools/remerge_labels.py <run_dir> <target_k>
-    python tools/remerge_labels.py ./runs/massive_intent_small_20260319_151040 59
+    python -m text_clustering.tools.remerge_labels <run_dir> <target_k>
+    python -m text_clustering.tools.remerge_labels ./runs/massive_intent_small_20260319_151040 59
 """
 
 import json
@@ -227,7 +227,8 @@ def iterative_merge(
 def main():
     if len(sys.argv) < 3:
         print(
-            "Usage: python tools/remerge_labels.py <run_dir> <target_k>"
+            "Usage: tc-remerge-labels <run_dir> <target_k>\n"
+            "       python -m text_clustering.tools.remerge_labels <run_dir> <target_k>"
         )
         sys.exit(1)
 

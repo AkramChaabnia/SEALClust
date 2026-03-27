@@ -2,8 +2,8 @@
 evaluate.py — Step 3 entry-point shim.
 
 All logic lives in text_clustering.pipeline.evaluation.
-This file is kept at the project root for backward compatibility
-(``python evaluate.py --data foo --predict_file ...`` continues to work).
+This file is kept for backward compatibility with the original paper's
+invocation style (``python evaluate.py --data foo --predict_file ...``).
 """
 
 from text_clustering.pipeline.evaluation import build_parser, main

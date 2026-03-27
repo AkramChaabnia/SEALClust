@@ -1,0 +1,52 @@
+cff-version: 1.2.0
+type: software
+title: "Text Clustering as Classification with LLMs (PPD M2 MLSD Reproduction)"
+message: "If you use this software, please cite it using the metadata from this file."
+abstract: |
+  A comprehensive reproduction and extension of the paper "Text Clustering as 
+  Classification with LLMs" with novel pipelines including SEAL-Clust, Hybrid 
+  Clustering, and Graph Community Clustering. Includes full experimental results,
+  baselines, and reproducible analysis.
+
+authors:
+  - family-names: Chaabnia
+    given-names: Akram
+    affiliation: "Université Paris Cité, MLSD M2"
+  - family-names: Mokhtari
+    given-names: Abdelheq
+    affiliation: "Université Paris Cité, MLSD M2"
+  - family-names: Razi
+    given-names: Mohamed Raouf
+    affiliation: "Université Paris Cité, MLSD M2"
+
+keywords:
+  - text-clustering
+  - large-language-models
+  - machine-learning
+  - natural-language-processing
+  - reproducibility
+  - clustering-algorithms
+
+license: MIT
+
+repository-code: "https://github.com/AkramChaabnia/text-clustering-llm"
+url: "https://arxiv.org/abs/2410.00927"
+
+references:
+  - type: article
+    authors:
+      - family-names: Huang
+        given-names: Chen
+      - family-names: He
+        given-names: Guoxiu
+    title: "Text Clustering as Classification with LLMs"
+    year: 2024
+    identifiers:
+      - type: other
+        value: "2410.00927"
+        description: "ArXiv identifier"
+    repository-code: "https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM"
+    url: "https://arxiv.org/abs/2410.00927"
+
+version: "1.9.0"
+date-released: "2026-03-27"

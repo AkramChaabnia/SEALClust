@@ -91,7 +91,7 @@ This document presents a comprehensive analysis of **100+ experiment runs** acro
 
 ## 3. Pipeline Versions
 
-### SEAL-Clust v2 (LLM-based, `paper/` pipeline)
+### SEAL-Clust v2 (LLM-based, `reference_impl/` pipeline)
 
 The reproduction of the original paper's approach adapted to our infrastructure:
 1. **Label generation**: LLM reads chunks of 15 texts, proposes candidate labels

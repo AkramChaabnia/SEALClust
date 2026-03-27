@@ -55,17 +55,17 @@ One command runs the entire pipeline end-to-end: embedding → clustering → LL
 ### Requirements
 
 - Python 3.12+
-- [conda](https://docs.conda.io/) (recommended) or `venv`
+- [conda](https://docs.conda.io/) (recommended), `venv`, or [uv](https://docs.astral.sh/uv/) (fastest)
 - An API key for [OpenAI](https://platform.openai.com/) or [OpenRouter](https://openrouter.ai)
 
 ### Installation
 
 ```bash
 # Clone and setup
-git clone <repo-url>
+git clone https://github.com/AkramChaabnia/text-clustering-llm.git
 cd text-clustering-llm
 
-# Option A: Using conda (recommended)
+# Option A: Using conda (recommended for data science workflows)
 conda create -n env_name python=3.12
 conda activate env_name
 pip install -e ".[dev]"
@@ -74,7 +74,47 @@ pip install -e ".[dev]"
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+
+# Option C: Using uv (fastest, modern Python package manager)
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md#environment-setup) for detailed setup instructions for each method.
+
+### Dependency Groups
+
+Choose which features you need to minimize installation size:
+
+```bash
+# Baseline pipeline only (6 core packages — smallest footprint)
+pip install -e .
+
+# Baseline + embeddings (for hybrid/SEAL-Clust pipelines)
+pip install -e ".[embeddings]"
+
+# Baseline + visualization (for plotting & analysis)
+pip install -e ".[viz]"
+
+# Development tools (linting, testing, type-checking)
+pip install -e ".[dev]"
+
+# Everything (all features + dev tools)
+pip install -e ".[all]"
+
+# Mix and match as needed
+pip install -e ".[embeddings,viz,dev]"
+```
+
+| Group | Includes | Use Case |
+|-------|----------|----------|
+| **(default)** | python-dotenv, tqdm, openai, numpy, scipy, scikit-learn | Baseline: `tc-seed-labels`, `tc-label-gen`, `tc-classify`, `tc-evaluate` |
+| **embeddings** | sentence-transformers, umap-learn | Hybrid/SEAL-Clust: `tc-hybrid`, `tc-sealclust`, `tc-sealclust-v3/v4` |
+| **viz** | matplotlib | Visualization: `tc-visualize` |
+| **http** | httpx | Alternative HTTP client (rarely needed) |
+| **dev** | ruff, commitizen, pre-commit, mypy, pytest | Development & contributions |
+| **all** | All of the above | Full feature set |
 
 ### API Key Configuration
 
@@ -245,7 +285,7 @@ tc-kmedoids --data massive_scenario --kmedoids_k 100
 
 # Step 2: Label generation
 tc-label-gen --data massive_scenario --run_dir ./runs/<run_dir>
-# (Optional) Re-merge: conda run -n ppd python tools/remerge_labels.py ./runs/<run_dir> 18
+# (Optional) Re-merge: tc-remerge-labels ./runs/<run_dir> 18
 
 # Step 3: Classify medoids only (~100 LLM calls)
 tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --medoid_mode
@@ -887,6 +927,9 @@ make run-sealclust-v3-propagate data=massive_scenario run=./runs/<run_dir>
 |---------|---------|
 | `tc-seed-labels` | Generate seed labels for Mode A (run once) |
 | `tc-preflight` | Verify LLM connectivity and configuration |
+| `tc-probe-models` | Test model compatibility before full runs |
+| `tc-remerge-labels` | Re-merge labels to a target K (iterative) |
+| `tc-analyze` | Generate dataset statistics JSON reports |
 | `tc-visualize` | Generate t-SNE visualisation of clustering results |
 
 ---
@@ -1325,11 +1368,12 @@ text-clustering-llm/
 │       ├── kmedoids_preprocessing.py# Mode B
 │       ├── gmm_preprocessing.py     # Mode C
 │       └── seed_labels.py           # Mode A Step 0
-├── paper/                            # Backward-compat evaluation scripts
-├── tools/
-│   ├── probe_models.py              # Model compatibility probe
-│   ├── preflight.py                 # Pre-run check (tc-preflight)
-│   └── remerge_labels.py            # Re-merge labels tool
+│   └── tools/                        # Developer utilities
+│       ├── preflight.py             # Pre-run check (tc-preflight)
+│       ├── probe_models.py          # Model compatibility probe (tc-probe-models)
+│       ├── remerge_labels.py        # Re-merge labels tool (tc-remerge-labels)
+│       └── analyze_datasets.py     # Dataset profiling (tc-analyze)
+├── reference_impl/                   # Original paper shims (backward-compat)
 ├── datasets/                         # 14 datasets (not in git)
 ├── runs/                             # All outputs (not in git)
 ├── logs/                             # Background run logs (not in git)
