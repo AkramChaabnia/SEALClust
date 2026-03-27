@@ -1,7 +1,7 @@
 # Text Clustering as Classification with LLMs
 
-> PPD reproduction — M2 MLSD, Université Paris Cité  
-> Based on: [Text Clustering as Classification with LLMs](https://arxiv.org/abs/2410.00927) (Chen Huang, Guoxiu He, 2024)  
+> PPD reproduction — M2 MLSD, Université Paris Cité
+> Based on: [Text Clustering as Classification with LLMs](https://arxiv.org/abs/2410.00927) (Chen Huang, Guoxiu He, 2024)
 > Original code: [ECNU-Text-Computing/Text-Clustering-via-LLM](https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM)
 
 This repository reproduces the paper's baseline and introduces **SEAL-Clust** (**S**calable **E**fficient **A**utonomous **L**LM **Clust**ering) — a 9-stage pipeline that reduces LLM cost by **10×** while maintaining competitive accuracy through overclustering + representative-based label discovery. It also provides a **Hybrid Pipeline** that combines LLM-based label generation with embedding-based K optimisation and GMM overclustering, **Graph Community Clustering** — a fundamentally different approach that builds a k-NN embedding graph, discovers clusters via Louvain community detection, and uses the LLM only for post-hoc labelling, plus **LLM-free baselines** (KMeans / GMM) for benchmarking.
@@ -62,8 +62,8 @@ One command runs the entire pipeline end-to-end: embedding → clustering → LL
 
 ```bash
 # Clone and setup
-git clone https://github.com/AkramChaabnia/text-clustering-llm.git
-cd text-clustering-llm
+git clone https://github.com/AkramChaabnia/SEALClust.git
+cd SEALClust
 
 # Option A: Using conda (recommended for data science workflows)
 conda create -n env_name python=3.12
@@ -297,7 +297,7 @@ tc-kmedoids --data massive_scenario --run_dir ./runs/<run_dir> --propagate
 tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 ```
 
-**Cost**: ~300 LLM calls · **Time**: 5–15 min 
+**Cost**: ~300 LLM calls · **Time**: 5–15 min
 
 ---
 
@@ -326,7 +326,7 @@ tc-gmm --data massive_scenario --run_dir ./runs/<run_dir> --propagate --soft --c
 tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 ```
 
-**Cost**: ~300 LLM calls · **Time**: 5–15 min 
+**Cost**: ~300 LLM calls · **Time**: 5–15 min
 
 ---
 ### Mode D — SEAL-Clust v2 Step-by-Step
@@ -365,7 +365,7 @@ tc-evaluate --data massive_scenario --run_dir ./runs/<run_dir>
 
 ---
 
-### Mode E — SEAL-Clust v2 Full Pipeline 
+### Mode E — SEAL-Clust v2 Full Pipeline
 
 Single `--full` command runs all 9 stages + evaluation.
 
@@ -380,7 +380,7 @@ tc-sealclust --data massive_scenario --k0 300 --k_star 18 --full
 tc-sealclust --data massive_scenario --k0 300 --k_method ensemble --full
 ```
 
-**Cost**: ~310 LLM calls · **Time**: ~10 min · 
+**Cost**: ~310 LLM calls · **Time**: ~10 min ·
 
 ---
 
@@ -645,7 +645,7 @@ make run-sealclust-v3-propagate data=massive_scenario run=./runs/<dir>
 | Scenario | Mode | Command |
 |----------|------|---------|
 | **One command, full automation** ⭐ | **S** | `tc-sealclust-v4 --data X --k0 300 --full` |
-| **One command, known K\*** ⭐ | **S** | `tc-sealclust-v4 --data X --k0 300 --k_star N --full`| 
+| **One command, known K\*** ⭐ | **S** | `tc-sealclust-v4 --data X --k0 300 --k_star N --full`|
 | **One command, full automation**| E | `tc-sealclust --data X --k0 300 --full` |
 | **One command, known K\***| E | `tc-sealclust --data X --k0 300 --k_star N --full` |
 | **v3: multi-method + one-word labels** | Z | `tc-sealclust-v3 --data X --k0 300 --full` |
@@ -1075,7 +1075,7 @@ To estimate the cost of a run on `massive_scenario` , check your LLM provider's 
 | GPT-4o-mini | $0.15 | $0.60 | ~$0.02 |
 | GPT-4o | $2.50 | $10.00 | ~$0.25 |
 | GPT-5.4-mini | $0.75 | $4.50 | ~$0.10 – $0.12 |
-| GPT-5.4 | $2.50 | $15.00 | ~$0.40 – $0.50 | 
+| GPT-5.4 | $2.50 | $15.00 | ~$0.40 – $0.50 |
 
 A typical v4 run on `massive_scenario` uses ~84K input + ~4K output tokens ≈ **88K total tokens**.
 
@@ -1333,7 +1333,7 @@ Some documents couldn't be classified. Try increasing K\*, or re-run Stage 7 for
 ## 14. Repository Structure
 
 ```
-text-clustering-llm/
+SEALClust/
 ├── text_clustering/                  # Python package
 │   ├── __init__.py
 │   ├── client.py                     # OpenRouter/OpenAI client factory
@@ -1520,7 +1520,7 @@ tc-sealclust-v4 --data massive_scenario --run_dir ./runs/<run_dir> --k_star 20 -
 
 ## 16. Development
 
-Branching: `main` ← `develop` ← `feature/<desc>` / `fix/<desc>` / `docs/<desc>`  
+Branching: `main` ← `develop` ← `feature/<desc>` / `fix/<desc>` / `docs/<desc>`
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ```bash

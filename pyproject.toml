@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 include = ["text_clustering/**/*.py"]
 
 [project]
-name = "text-clustering-llm"
+name = "sealclust"
 version = "1.9.0"
 description = "Text Clustering as Classification with LLMs — PPD M2 MLSD"
 readme = "README.md"
@@ -19,11 +19,11 @@ authors = [
 ]
 
 [project.urls]
-Repository = "https://github.com/AkramChaabnia/text-clustering-llm"
-Documentation = "https://github.com/AkramChaabnia/text-clustering-llm/blob/develop/README.md"
+Repository = "https://github.com/AkramChaabnia/SEALClust"
+Documentation = "https://github.com/AkramChaabnia/SEALClust/blob/develop/README.md"
 "Original Paper" = "https://arxiv.org/abs/2410.00927"
 "Original Code" = "https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM"
-Issues = "https://github.com/AkramChaabnia/text-clustering-llm/issues"
+Issues = "https://github.com/AkramChaabnia/SEALClust/issues"
 
 dependencies = [
   # Baseline pipeline dependencies (core)
@@ -56,7 +56,7 @@ dev = [
 ]
 # All extras for full development environment
 all = [
-  "text-clustering-llm[embeddings,viz,http,dev]",
+  "sealclust[embeddings,viz,http,dev]",
 ]
 
 [project.scripts]

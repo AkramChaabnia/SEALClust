@@ -29,8 +29,8 @@ assignees: ""
 ## Environment
 
 - **OS**: (e.g., Ubuntu 22.04, macOS 13.x)
-- **Python Version**: 
-- **Package Version** (from `pip show text-clustering-llm` or `CHANGELOG.md`):
+- **Python Version**:
+- **Package Version** (from `pip show sealclust` or `CHANGELOG.md`):
 - **Installation Method**: (conda/venv/pip/uv)
 - **LLM Provider**: (OpenAI/OpenRouter/local)
 

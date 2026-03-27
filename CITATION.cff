@@ -3,8 +3,8 @@ type: software
 title: "Text Clustering as Classification with LLMs (PPD M2 MLSD Reproduction)"
 message: "If you use this software, please cite it using the metadata from this file."
 abstract: |
-  A comprehensive reproduction and extension of the paper "Text Clustering as 
-  Classification with LLMs" with novel pipelines including SEAL-Clust, Hybrid 
+  A comprehensive reproduction and extension of the paper "Text Clustering as
+  Classification with LLMs" with novel pipelines including SEAL-Clust, Hybrid
   Clustering, and Graph Community Clustering. Includes full experimental results,
   baselines, and reproducible analysis.
 
@@ -29,7 +29,7 @@ keywords:
 
 license: MIT
 
-repository-code: "https://github.com/AkramChaabnia/text-clustering-llm"
+repository-code: "https://github.com/AkramChaabnia/SEALClust"
 url: "https://arxiv.org/abs/2410.00927"
 
 references:

@@ -60,7 +60,7 @@ def make_client() -> OpenAI:
     if provider == "openrouter":
         if site_url := os.getenv("OR_SITE_URL", ""):
             extra_headers["HTTP-Referer"] = site_url
-        if app_name := os.getenv("OR_APP_NAME", "text-clustering-llm"):
+        if app_name := os.getenv("OR_APP_NAME", "SEALClust"):
             extra_headers["X-Title"] = app_name
 
     return OpenAI(
@@ -84,7 +84,8 @@ if __name__ == "__main__":
     base_url = os.getenv("OPENAI_BASE_URL", "(openai default)")
     provider_env = os.getenv("LLM_PROVIDER", "")
     detected = (
-        provider_env if provider_env
+        provider_env
+        if provider_env
         else ("openrouter" if "openrouter" in str(base_url) else "openai")
     )
     print(f"Provider  : {detected}")

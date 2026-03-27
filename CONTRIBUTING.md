@@ -126,8 +126,8 @@ Or: `make branch name=label-gen-retry type=fix`
 
 ```bash
 # 1. Clone
-git clone https://github.com/AkramChaabnia/text-clustering-llm.git
-cd text-clustering-llm
+git clone https://github.com/AkramChaabnia/SEALClust.git
+cd SEALClust
 
 # 2. Create venv with uv
 uv venv --python 3.12 .venv
@@ -153,8 +153,8 @@ Or steps 2–4 in one command: `make setup`
 
 ```bash
 # 1. Clone
-git clone https://github.com/AkramChaabnia/text-clustering-llm.git
-cd text-clustering-llm
+git clone https://github.com/AkramChaabnia/SEALClust.git
+cd SEALClust
 
 # 2. Create and activate a conda environment
 conda create -n ppd python=3.12 -y
@@ -248,8 +248,8 @@ If your PR includes new baseline runs or experimental comparisons:
 ## Getting Help
 
 - **Questions?** Check [README.md](./README.md) and [FINDINGS.md](./FINDINGS.md)
-- **Bug?** Search [GitHub Issues](https://github.com/AkramChaabnia/text-clustering-llm/issues)
-- **New idea?** [Create an issue](https://github.com/AkramChaabnia/text-clustering-llm/issues/new/choose)
+- **Bug?** Search [GitHub Issues](https://github.com/AkramChaabnia/SEALClust/issues)
+- **New idea?** [Create an issue](https://github.com/AkramChaabnia/SEALClust/issues/new/choose)
 
 ---
 
