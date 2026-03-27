@@ -55,17 +55,17 @@ One command runs the entire pipeline end-to-end: embedding → clustering → LL
 ### Requirements
 
 - Python 3.12+
-- [conda](https://docs.conda.io/) (recommended) or `venv`
+- [conda](https://docs.conda.io/) (recommended), `venv`, or [uv](https://docs.astral.sh/uv/) (fastest)
 - An API key for [OpenAI](https://platform.openai.com/) or [OpenRouter](https://openrouter.ai)
 
 ### Installation
 
 ```bash
 # Clone and setup
-git clone <repo-url>
+git clone https://github.com/AkramChaabnia/text-clustering-llm.git
 cd text-clustering-llm
 
-# Option A: Using conda (recommended)
+# Option A: Using conda (recommended for data science workflows)
 conda create -n env_name python=3.12
 conda activate env_name
 pip install -e ".[dev]"
@@ -74,7 +74,47 @@ pip install -e ".[dev]"
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+
+# Option C: Using uv (fastest, modern Python package manager)
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md#environment-setup) for detailed setup instructions for each method.
+
+### Dependency Groups
+
+Choose which features you need to minimize installation size:
+
+```bash
+# Baseline pipeline only (6 core packages — smallest footprint)
+pip install -e .
+
+# Baseline + embeddings (for hybrid/SEAL-Clust pipelines)
+pip install -e ".[embeddings]"
+
+# Baseline + visualization (for plotting & analysis)
+pip install -e ".[viz]"
+
+# Development tools (linting, testing, type-checking)
+pip install -e ".[dev]"
+
+# Everything (all features + dev tools)
+pip install -e ".[all]"
+
+# Mix and match as needed
+pip install -e ".[embeddings,viz,dev]"
+```
+
+| Group | Includes | Use Case |
+|-------|----------|----------|
+| **(default)** | python-dotenv, tqdm, openai, numpy, scipy, scikit-learn | Baseline: `tc-seed-labels`, `tc-label-gen`, `tc-classify`, `tc-evaluate` |
+| **embeddings** | sentence-transformers, umap-learn | Hybrid/SEAL-Clust: `tc-hybrid`, `tc-sealclust`, `tc-sealclust-v3/v4` |
+| **viz** | matplotlib | Visualization: `tc-visualize` |
+| **http** | httpx | Alternative HTTP client (rarely needed) |
+| **dev** | ruff, commitizen, pre-commit, mypy, pytest | Development & contributions |
+| **all** | All of the above | Full feature set |
 
 ### API Key Configuration
 

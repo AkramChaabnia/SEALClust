@@ -189,3 +189,68 @@ uv lock
 git add uv.lock pyproject.toml
 cz commit   # type: build
 ```
+
+---
+
+## Code Quality & Pre-commit Hooks
+
+We use **Ruff** for linting/formatting and **Bandit** for security checks (configured via pre-commit):
+
+```bash
+# Manual checks before commit
+ruff check . --fix          # Fix linting issues
+ruff format .              # Format code
+
+# Or use Makefile shortcut
+make lint
+```
+
+Pre-commit hooks run automatically on `git commit`. To manually test all hooks:
+
+```bash
+pre-commit run --all-files
+```
+
+---
+
+## Submitting Experimental Results
+
+If your PR includes new baseline runs or experimental comparisons:
+
+1. **Create `experiment/<description>` branch**
+2. **Run pipeline and save results:**
+   ```bash
+   make run-step1 data=<dataset>
+   make run-step2 data=<dataset> run=<run_dir>
+   make run-step3 data=<dataset> run=<run_dir>
+   # Results → runs/<dataset>_small_<timestamp>/
+   ```
+3. **Document in FINDINGS.md:**
+   - Dataset, timestamp, model, metrics (ACC/NMI/ARI)
+   - Key findings and observations
+
+4. **Commit results:**
+   ```bash
+   git add runs/<dataset>_small_*/metrics.json FINDINGS.md
+   cz commit --scope findings --message "add: experimental results for <dataset>"
+   ```
+
+---
+
+## Documentation Standards
+
+- **Code:** Add docstrings to public functions, include type hints
+- **README & tutorials:** Keep examples runnable and up-to-date
+- **FINDINGS.md:** Document timestamps, models, results, root causes
+
+---
+
+## Getting Help
+
+- **Questions?** Check [README.md](./README.md) and [FINDINGS.md](./FINDINGS.md)
+- **Bug?** Search [GitHub Issues](https://github.com/AkramChaabnia/text-clustering-llm/issues)
+- **New idea?** [Create an issue](https://github.com/AkramChaabnia/text-clustering-llm/issues/new/choose)
+
+---
+
+**Happy contributing!**
