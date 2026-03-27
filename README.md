@@ -285,7 +285,7 @@ tc-kmedoids --data massive_scenario --kmedoids_k 100
 
 # Step 2: Label generation
 tc-label-gen --data massive_scenario --run_dir ./runs/<run_dir>
-# (Optional) Re-merge: conda run -n ppd python tools/remerge_labels.py ./runs/<run_dir> 18
+# (Optional) Re-merge: tc-remerge-labels ./runs/<run_dir> 18
 
 # Step 3: Classify medoids only (~100 LLM calls)
 tc-classify --data massive_scenario --run_dir ./runs/<run_dir> --medoid_mode
@@ -927,6 +927,9 @@ make run-sealclust-v3-propagate data=massive_scenario run=./runs/<run_dir>
 |---------|---------|
 | `tc-seed-labels` | Generate seed labels for Mode A (run once) |
 | `tc-preflight` | Verify LLM connectivity and configuration |
+| `tc-probe-models` | Test model compatibility before full runs |
+| `tc-remerge-labels` | Re-merge labels to a target K (iterative) |
+| `tc-analyze` | Generate dataset statistics JSON reports |
 | `tc-visualize` | Generate t-SNE visualisation of clustering results |
 
 ---
@@ -1365,11 +1368,12 @@ text-clustering-llm/
 │       ├── kmedoids_preprocessing.py# Mode B
 │       ├── gmm_preprocessing.py     # Mode C
 │       └── seed_labels.py           # Mode A Step 0
-├── paper/                            # Backward-compat evaluation scripts
-├── tools/
-│   ├── probe_models.py              # Model compatibility probe
-│   ├── preflight.py                 # Pre-run check (tc-preflight)
-│   └── remerge_labels.py            # Re-merge labels tool
+│   └── tools/                        # Developer utilities
+│       ├── preflight.py             # Pre-run check (tc-preflight)
+│       ├── probe_models.py          # Model compatibility probe (tc-probe-models)
+│       ├── remerge_labels.py        # Re-merge labels tool (tc-remerge-labels)
+│       └── analyze_datasets.py     # Dataset profiling (tc-analyze)
+├── reference_impl/                   # Original paper shims (backward-compat)
 ├── datasets/                         # 14 datasets (not in git)
 ├── runs/                             # All outputs (not in git)
 ├── logs/                             # Background run logs (not in git)

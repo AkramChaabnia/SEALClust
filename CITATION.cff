@@ -48,5 +48,5 @@ references:
     repository-code: "https://github.com/ECNU-Text-Computing/Text-Clustering-via-LLM"
     url: "https://arxiv.org/abs/2410.00927"
 
-version: "1.8.0"
+version: "1.9.0"
 date-released: "2026-03-27"
